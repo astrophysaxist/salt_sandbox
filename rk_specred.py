@@ -145,7 +145,6 @@ def specred(rawdir, prodir, imreduce=True, specreduce=True, calfile=None, lamp='
 
     #get the name of the files
     infile_list=glob.glob(rawdir+'*.fits')
-    infiles=','.join(['%s' % x for x in infile_list])
     
 
     #get the current date for the files
@@ -158,9 +157,9 @@ def specred(rawdir, prodir, imreduce=True, specreduce=True, calfile=None, lamp='
     dbfile='spec%s.db' % obsdate
 
     #create the observation log
-    obs_dict=obslog(infile_list)
+    # obs_dict=obslog(infile_list)
 
-    import pysalt.lib.saltsafeio as saltio
+    # import pysalt.lib.saltsafeio as saltio
     
     print infile_list
                            
@@ -196,28 +195,40 @@ def specred(rawdir, prodir, imreduce=True, specreduce=True, calfile=None, lamp='
     # Go through the list of files, find out what type of file they are
     #
     logger.info("Identifying frames and sorting by type (object/flat/arc)")
-    file_type_dict = {
+    obslog = {
         'FLAT': [],
         'ARC': [],
         'OBJECT': [],
     }
 
     for idx, filename in enumerate(infile_list):
-        hdulist = open(filename)
-        if (hdulist[0].header['CCDTYPE'].find("FLAT") >= 0 and
-            hdulist[0].header['INSTRUME'] == "RSS"):
-
-            file_type_dict['FLAT'].append(filename)
-        elif (hdulist[0].header['CCDTYPE']
+        hdulist = pyfits.open(filename)
+        if (not hdulist[0].header['INSTRUME'] == "RSS"):
+            logger.info("Frame %s is not a valid RSS frame (instrument: %s)" % (
+                filename, hdulist[0].header['INSTRUME']))
+            continue
             
+        obstype = hdulist[0].header['OBSTYPE']
+        if (obstype in obslog):
+            obslog[obstype].append(filename)
+            logger.debug("Identifying %s as %s" % (filename, obstype))
+        else:
+            logger.info("No idea what to do with frame %s --> %s" % (filename, obstype))
+            
+    for type in obslog:
+        if (len(obslog[type]) > 0):
+            logger.info("Found the following %ss:\n -- %s" % (
+                type, "\n -- ".join(obslog[type])))
+        else:
+            logger.info("No files of type %s found!" % (type))
+
     #
     # Go through the list of files, find all flat-fields, and create a master flat field
     #
-    logger.info("Searching for files identified as FLAT fields")
-    flatfield_filenames = []
-    for idx, filename in enumerate(infile_list):
+    logger.info("Creating a master flat-field frame")
+    for idx, filename in enumerate(obslog['FLAT']):
         hdulist = open(filename)
-        if (hdulist[0].header['CCDTYPE'].find("FLAT") >= 0 and
+        if (hdulist[0].header['OBSTYPE'].find("FLAT") >= 0 and
             hdulist[0].header['INSTRUME'] == "RSS"):
             #
             # This is a flat-field
@@ -228,18 +239,28 @@ def specred(rawdir, prodir, imreduce=True, specreduce=True, calfile=None, lamp='
                                 verbose=False)
             flatfield_hdus.append(hdu)
         
-    if (len(flatfield_filenames) > 0):
+    if (len(obslog['FLAT']) > 0):
         # We have some flat-field files
         # run some combination method
+        pass
+
+
 
     #
     # Determine a wavelength solution from ARC frames, where available
     #
-    for idx, filename in enumerate(infile_list):
+    logger.info("Searching for a wavelength calibration from the ARC files")
+    for idx, filename in enumerate(obslog['ARC']):
         hdulist = open(filename)
 
+
+    return
+
+            
+
+
     verbose = False
-    for idx, filename in enumerate(infile_list):
+    for idx, filename in enumerate(obslog['FLAT']):
         cur_op = 0
 
         dirname, filebase = os.path.split(filename)
