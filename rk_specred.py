@@ -60,9 +60,12 @@ import pysalt.mp_logging
 import logging
 
 def salt_prepdata(infile, badpixelimage=None, create_variance=False, 
+                  masterbias=None,
+                  flatfield_frame=None, mosaic=False,
                   verbose=False, *args):
 
-    logger = logging.getLogger("PrepData")
+    _, fb = os.path.split(infile)
+    logger = logging.getLogger("PrepData(%s)" % (fb))
     logger.info("Working on file %s" % (infile))
 
     hdulist = pyfits.open(infile)
@@ -76,31 +79,58 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
     #
     # Do some prepping
     #
+    hdulist.info()
+
+    logger.debug("Prepare'ing")
     hdulist = pysalt.saltred.saltprepare.prepare(
         hdulist,
         createvar=create_variance, 
         badpixelstruct=badpixel_hdu)
     # Add some history headers here
 
+
+    hdulist.info()
+
     #
     # Overscan/bias
     #
-    hdulist = pysalt.saltred.saltbias.bias(hdulist, *args)
+    logger.debug("Subtracting bias & overscan")
+    for ext in hdulist:
+        if (not ext.data == None): print ext.data.shape
+    bias_hdu = None
+    if (not masterbias == None and os.path.isfile(masterbias)):
+        bias_hdu = pyfits.open(masterbias)
+    hdulist = pysalt.saltred.saltbias.bias(
+        hdulist, 
+        subover=True, trim=True, subbias=False, 
+        bstruct=bias_hdu,
+        median=False, function='polynomial', order=5, rej_lo=3.0, rej_hi=5.0, 
+        niter=10, plotover=False, 
+        log=pysalt_log, verbose=verbose)
+    logger.debug("done with bias & overscan")
+
+    print "--------------"
+    for ext in hdulist:
+        if (not ext.data == None): print ext.data.shape
+
     # Again, add some headers here
 
     #
     # Gain
     #
+    logger.debug("Correcting gain")
     dblist = [] #saltio.readgaindb(gaindb)
     hdulist = pysalt.saltred.saltgain.gain(hdulist,
                    mult=True, 
                    usedb=False, 
                    dblist=dblist, 
                    log=pysalt_log, verbose=verbose)
+    logger.debug("done with gain")
 
     #
     # Xtalk
     #
+    logger.debug("fixing crosstalk")
     usedb = False
     if usedb:
         xtalkfile = xtalkfile.strip()
@@ -117,22 +147,62 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
         xcoeff=[]
 
     hdulist = pysalt.saltred.saltxtalk.xtalk(hdulist, xcoeff, log=pysalt_log, verbose=verbose)
+    logger.debug("done with crosstalk")
 
     #
     # crj-clean
     #
     #clean the cosmic rays
     multithread = True
-
+    logger.debug("removing cosmics")
     if multithread and len(hdulist)>1:
         crj_function = pysalt.saltred.saltcrclean.multicrclean
     else:
         crj_function = pysalt.saltred.saltcrclean.crclean
 
-    hdulist = crj_function(hdulist, 
-                           crtype='edge', thresh=5, mbox=11, bthresh=5.0,
-                           flux_ratio=0.2, bbox=25, gain=1.0, rdnoise=5.0, fthresh=5.0, bfactor=2,
-                           gbox=3, maxiter=5)
+    # hdulist = crj_function(hdulist, 
+    #                        crtype='edge', thresh=5, mbox=11, bthresh=5.0,
+    #                        flux_ratio=0.2, bbox=25, gain=1.0, rdnoise=5.0, fthresh=5.0, bfactor=2,
+    #                        gbox=3, maxiter=5)
+    logger.debug("done with cosmics")
+
+
+    #
+    # Apply flat-field correction if requested
+    #
+    if (not flatfield_frame == None):
+        logger.debug("Applying flatfield")
+        #saltflat('xgbpP*fits', '', 'f', flatimage, minflat=500, clobber=True, logfile=logfile, verbose=True)
+        logger.debug("done with flatfield")
+
+    if (mosaic):
+        logger.debug("Mosaicing all chips together")
+        geomfile=pysalt.get_data_filename("pysalt$data/rss/RSSgeom.dat")
+        geomfile=pysalt.get_data_filename("data/rss/RSSgeom.dat")
+        logger.debug("Reading gemotry from file %s (%s)" % (geomfile, os.path.isfile(geomfile)))
+
+        # does CCD geometry definition file exist
+        if (not os.path.isfile(geomfile)):
+            logger.critical("Unable to read geometry file %s!" % (geomfile))
+        else:
+
+            gap = 0
+            xshift = [0, 0]
+            yshift = [0, 0]
+            rotation = [0, 0]
+            gap, xshift, yshift, rotation, status = pysalt.lib.saltio.readccdgeom(geomfile, logfile=None, status=0)
+            logger.debug("mosaicing -- GAP:%f - X-shift:%f/%f  y-shift:%f/%f  rotation:%f/%f" % (
+                gap, xshift[0], xshift[1], yshift[0], yshift[1], rotation[0], rotation[1]))
+
+            # create the mosaic
+            hdulist = pysalt.saltred.saltmosaic.make_mosaic(
+                struct=hdulist, 
+                gap=gap, xshift=xshift, yshift=yshift, rotation=rotation, 
+                interp_type='linear',              
+                boundary='constant', constant=0, geotran=True, fill=False,
+                cleanup=True, log=None, verbose=verbose)
+            logger.debug("done with mosaic")
+
 
     return hdulist
 
@@ -251,7 +321,48 @@ def specred(rawdir, prodir, imreduce=True, specreduce=True, calfile=None, lamp='
     #
     logger.info("Searching for a wavelength calibration from the ARC files")
     for idx, filename in enumerate(obslog['ARC']):
+        _, fb = os.path.split(filename)
         hdulist = open(filename)
+
+        out_filename = "ARC_%s" % (fb)
+        logger.info("Creating mosaic for frame %s --> %s" % (fb, out_filename))
+
+        hdu = salt_prepdata(filename, 
+                            badpixelimage=None, 
+                            create_variance=False, 
+                            mosaic=True,
+                            #mosaic=False,
+                            verbose=False)
+        
+        pysalt.clobberfile(out_filename)
+        hdu.writeto(out_filename)
+
+        lamp=hdu[0].header['LAMPID'].strip().replace(' ', '')
+        #arcimage='mfxgbp'+os.path.basename(infile_list[i])
+        arcimage = out_filename
+        lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.txt" % lamp)
+        #lamp='Ar'
+        automethod='Matchlines'
+        skysection=[800,1000]
+        logger.info("Searching for wavelength solution (lamp:%s, arc-image:%s)" % (
+            lamp, arcimage))
+        specidentify(arcimage, lampfile, dbfile, guesstype='rss', 
+                     guessfile='', automethod=automethod,  function='legendre',  order=5, 
+                     rstep=100, rstart='middlerow', mdiff=10, thresh=3, niter=5, 
+                     inter=False, clobber=True, logfile=logfile, verbose=True)
+        logger.debug("Done with specidentify")
+
+        logger.debug("Starting specrectify")
+        specrectify(arcimage, outimages='', outpref='x', solfile=dbfile, caltype='line', 
+                    function='legendre',  order=3, inttype='interp', w1=None, w2=None, dw=None, nw=None,
+                    blank=0.0, clobber=True, logfile=logfile, verbose=True)
+        logger.debug("Done with specrectify")
+
+
+    #
+    # Now apply wavelength solution found above to your data frames
+    #
+
 
 
     return
