@@ -10,6 +10,8 @@ numpy.seterr(divide='ignore', invalid='ignore')
 # Disable nasty and useless RankWarning when spline fitting
 import warnings
 warnings.simplefilter('ignore', numpy.RankWarning)
+# also ignore some other annoying warning
+warnings.simplefilter('ignore', RuntimeWarning)
 
 import bottleneck
 
@@ -17,6 +19,8 @@ from PySpectrograph.Models import RSSModel
 
 
 
+
+    
 
 import pysalt
 
@@ -38,52 +42,8 @@ def extract_arc_spectrum(hdulist, line=None, avg_width=10):
 
 mm_to_A = 10e6
 
-if __name__ == "__main__":
-    filename = sys.argv[1]
+def find_list_of_lines(spec, avg_width):
 
-    hdulist = pyfits.open(filename)
-    hdulist.info()
-    line = int(sys.argv[2])
-
-    avg_width = 10
-    spec = extract_arc_spectrum(hdulist, line, avg_width)
-
-    binx, biny = pysalt.get_binning(hdulist)
-
-    hdr = hdulist[0].header
-    rss = RSSModel.RSSModel(
-        grating_name=hdr['GRATING'], 
-        gratang=hdr['GR-ANGLE'], #45, 
-        camang=hdr['CAMANG'], #45, 
-        slit=1.0, 
-        xbin=binx, ybin=biny, 
-        xpos=-0.30659999999999998, ypos=0.0117, wavelength=None)
-
-    central_wl = rss.calc_centralwavelength() * mm_to_A
-    print central_wl
-
-    print "blue:", rss.calc_bluewavelength() * mm_to_A
-    print "red:", rss.calc_redwavelength() * mm_to_A
-
-    print "dispersion: A/px", (rss.calc_redwavelength()-rss.calc_bluewavelength())*mm_to_A/spec.shape[0]
-    
-    #print "ang.dispersion:", rss.calc_angdisp(rss.beta())
-    print "ang.dispersion:", rss.calc_angdisp(-rss.beta())
-
-    pixelsize = 15e-6
-    print "lin.dispersion:", rss.calc_lindisp(rss.beta())
-    print "lin.dispersion:", rss.calc_lindisp(rss.beta()) / (mm_to_A*pixelsize)
-
-    print "resolution @ central w.l.:", rss.calc_resolution(
-        w=rss.calc_centralwavelength(), 
-        alpha=rss.alpha(), 
-        beta=-rss.beta())
-    
-    print "resolution element:", rss.calc_resolelement(rss.alpha(), -rss.beta()) * mm_to_A
-
-    #
-    # Now find a list of strong lines
-    #
     max_intensity = numpy.max(spec)
     x_pixels = numpy.arange(spec.shape[0]) # FITS starts counting pixels at 1
 
@@ -136,7 +96,70 @@ if __name__ == "__main__":
     s2n = spec / (numpy.sqrt(spec*readnoise*2*avg_width) / (2*avg_width))
     numpy.savetxt("wl_real_peaks.sn", numpy.append(
         x_pixels[real_peak].reshape((-1,1)), s2n[real_peak].reshape((-1,1)), axis=1))
+
+
+    # Combine all relevant data generated above for later use
+    combined = numpy.empty((numpy.sum(real_peak), 5))
+    combined[:,0] = x_pixels[real_peak]
+    combined[:,1] = spec[real_peak]
+    combined[:,2] = continuum[real_peak]
+    combined[:,3] = continuum_noise[real_peak]
+    combined[:,4] = s2n[real_peak]
+
+    return combined
+
+if __name__ == "__main__":
+    filename = sys.argv[1]
+
+    hdulist = pyfits.open(filename)
+    hdulist.info()
+    line = int(sys.argv[2])
+
+    avg_width = 10
+    spec = extract_arc_spectrum(hdulist, line, avg_width)
+
+    binx, biny = pysalt.get_binning(hdulist)
+
+    hdr = hdulist[0].header
+    rss = RSSModel.RSSModel(
+        grating_name=hdr['GRATING'], 
+        gratang=hdr['GR-ANGLE'], #45, 
+        camang=hdr['CAMANG'], #45, 
+        slit=1.0, 
+        xbin=binx, ybin=biny, 
+        xpos=-0.30659999999999998, ypos=0.0117, wavelength=None)
+
+    central_wl = rss.calc_centralwavelength() * mm_to_A
+    print central_wl
+
+    blue_edge = rss.calc_bluewavelength() * mm_to_A
+    red_edge = rss.calc_redwavelength() * mm_to_A
+    wl_range = red_edge - blue_edge
+    print "blue:", blue_edge
+    print "red:", red_edge
+
+    dispersion = (rss.calc_redwavelength()-rss.calc_bluewavelength())*mm_to_A/spec.shape[0]
+    print "dispersion: A/px", dispersion
     
+    #print "ang.dispersion:", rss.calc_angdisp(rss.beta())
+    print "ang.dispersion:", rss.calc_angdisp(-rss.beta())
+
+    pixelsize = 15e-6
+    print "lin.dispersion:", rss.calc_lindisp(rss.beta())
+    print "lin.dispersion:", rss.calc_lindisp(rss.beta()) / (mm_to_A*pixelsize)
+
+    print "resolution @ central w.l.:", rss.calc_resolution(
+        w=rss.calc_centralwavelength(), 
+        alpha=rss.alpha(), 
+        beta=-rss.beta())
+    
+    print "resolution element:", rss.calc_resolelement(rss.alpha(), -rss.beta()) * mm_to_A
+
+    #
+    # Now find a list of strong lines
+    #
+    lineinfo = find_list_of_lines(spec, avg_width)
+
     ############################################################################
     #
     # Now we have a full line-list with signal-to-noise ratios as brightness
@@ -144,6 +167,77 @@ if __name__ == "__main__":
     #
     ############################################################################
 
+    # based on the wavelength model from RSS translate x-positions into wavelengths
+    print dispersion
+    print lineinfo[:,0]
+    wl = lineinfo[:,0] * dispersion + blue_edge
+    lineinfo = numpy.append(lineinfo, wl.reshape((-1,1)), axis=1)
+    numpy.savetxt("linecal", lineinfo)
 
-    #print x_pixels
+    #
+    # Load linelist
+    #
+    lamp=hdulist[0].header['LAMPID'].strip().replace(' ', '')
+    lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.txt" % lamp)
+    lines = numpy.loadtxt(lampfile)
+    print lines.shape
+    print lines
+
+    # Now select only lines that are in the estimated range of our ARC spectrum
+    in_range = (lines[:,0] > numpy.min(wl)) & (lines[:,0] < numpy.max(wl))
+    lines = lines[in_range]
+    print lines
+
+    #
+    # Find average offset between arc lines and reference lines
+    # 
+    
+    # only select strong lines in the ARC spectrum
+    wl = wl[lineinfo[:,4] > 50]
+
+    print lines[:,0].reshape((-1,1)).T.shape
+    print wl.reshape((-1,1)).shape
+
+    numpy.savetxt("arc_lines", wl)
+    numpy.savetxt("ref_lines", lines[:,0])
+
+
+    differences = lines[:,0].reshape((-1,1)).T - wl.reshape((-1,1))
+    print differences.shape
+    numpy.savetxt("diffs", differences.flatten())
+
+    # Now find the most frequently found offset
+    # # Use kernel densities to avoid ambiguities between two adjacent bins
+
+    # allow for as much as 20% shift in wavelength coverage
+    # hopefully things are not THAT bad, but if: too bad for you
+    max_overlap = 0.2 * wl_range 
+
+    print wl_range
+
+    count, bins = numpy.histogram(differences, bins=30, range=[-max_overlap,max_overlap])
+    hist  = numpy.empty((count.shape[0],3))
+    hist[:,0] = bins[:-1]
+    hist[:,1] = bins[1:]
+    hist[:,2] = count[:]
+    numpy.savetxt("histogram", hist)
+
+    # Now find the offset that allows to match the most lines
+    hist_max = numpy.argmax(count)
+    avg_shift = 0.5 * (bins[hist_max]+bins[hist_max+1])
+    
+    # This is the best shift to bring our line catalog in agreement 
+    # with the catalog of reference lines
+    print "NEED SHIFT of ~",avg_shift,"A"
+
+    # Now improve the wavelength calibration of all found ARC lines by 
+    # applying the shift we just found
+    lineinfo[:,-1] += avg_shift
+
+    #
+    # Now match the two catalogs so we can derive an even better wavelength 
+    # calibration
+    #
+    
+    
 
