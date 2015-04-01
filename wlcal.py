@@ -17,12 +17,57 @@ import bottleneck
 
 from PySpectrograph.Models import RSSModel
 
+import pysalt
 
+
+import scipy.spatial
+
+
+def match_line_catalogs(arc, ref, matching_radius):
+
+    #
+    # For each line in the ARC catalog, find the closest match in the 
+    # reference line list
+    #
+
+    print arc
+    print ref
+    print matching_radius
+    #matching_radius = 7
+    kdtree = scipy.spatial.cKDTree(ref[:,0].reshape((-1,1)))
+    nearest_neighbor, i = kdtree.query(x=arc[:,-1].reshape((-1,1)), 
+                                       k=1, # only find 1 nearest neighbor
+                                       p=1, # use linear distance
+                                       distance_upper_bound=matching_radius)
+
+    i = numpy.array(i)
+    i[i>=ref.shape[0]] = 0
+    print nearest_neighbor
+    print i
+
+    print "arc/ref",arc.shape, ref.shape
+    print "nn/i",nearest_neighbor.shape, i.shape
+    #
+    # Now match both catalogs
+    # 
+    matched = numpy.zeros((arc.shape[0], (arc.shape[1]+ref.shape[1])))
+    matched[:,:arc.shape[1]] = arc
+    matched[:,arc.shape[1]:] = ref[i]
+    
+    #
+    # Now eliminate all "matches" without a sufficiently close match
+    # (i.e. where nearest_neighbordistance == inf)
+    #
+    print "before:",matched.shape
+    good_match = numpy.isfinite(nearest_neighbor)
+    matched = matched[good_match]
+    print "after:",matched.shape
+
+    return matched
 
 
     
 
-import pysalt
 
 def extract_arc_spectrum(hdulist, line=None, avg_width=10):
 
@@ -185,8 +230,8 @@ if __name__ == "__main__":
 
     # Now select only lines that are in the estimated range of our ARC spectrum
     in_range = (lines[:,0] > numpy.min(wl)) & (lines[:,0] < numpy.max(wl))
-    lines = lines[in_range]
-    print lines
+    ref_lines = lines[in_range]
+    print ref_lines
 
     #
     # Find average offset between arc lines and reference lines
@@ -195,14 +240,14 @@ if __name__ == "__main__":
     # only select strong lines in the ARC spectrum
     wl = wl[lineinfo[:,4] > 50]
 
-    print lines[:,0].reshape((-1,1)).T.shape
+    print ref_lines[:,0].reshape((-1,1)).T.shape
     print wl.reshape((-1,1)).shape
 
     numpy.savetxt("arc_lines", wl)
-    numpy.savetxt("ref_lines", lines[:,0])
+    numpy.savetxt("ref_lines", ref_lines[:,0])
 
 
-    differences = lines[:,0].reshape((-1,1)).T - wl.reshape((-1,1))
+    differences = ref_lines[:,0].reshape((-1,1)).T - wl.reshape((-1,1))
     print differences.shape
     numpy.savetxt("diffs", differences.flatten())
 
@@ -216,6 +261,7 @@ if __name__ == "__main__":
     print wl_range
 
     count, bins = numpy.histogram(differences, bins=30, range=[-max_overlap,max_overlap])
+    binwidth = bins[1] - bins[0]
     hist  = numpy.empty((count.shape[0],3))
     hist[:,0] = bins[:-1]
     hist[:,1] = bins[1:]
@@ -238,6 +284,7 @@ if __name__ == "__main__":
     # Now match the two catalogs so we can derive an even better wavelength 
     # calibration
     #
-    
-    
+    matched = match_line_catalogs(lineinfo, ref_lines, binwidth)
+    numpy.savetxt("matched.lines", matched)
+        
 
