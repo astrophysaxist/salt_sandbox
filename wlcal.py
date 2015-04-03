@@ -24,7 +24,8 @@ import scipy.spatial
 import pysalt.mp_logging
 import logging
 
-def match_line_catalogs(arc, ref, matching_radius):
+def match_line_catalogs(arc, ref, matching_radius, verbose=False,
+                        col_ref=0, col_arc=-1):
 
     logger = logging.getLogger("MatchLineCat")
 
@@ -35,13 +36,15 @@ def match_line_catalogs(arc, ref, matching_radius):
 
     logger.debug("#ARCs: %d  -- #REF: %d  --  MatchRadius: %.2f" % (
         arc.shape[0], ref.shape[0], matching_radius))
-
+    if (verbose):
+        numpy.savetxt("mlc.verbose", arc)
+        
     # print arc
     # print ref
     # print matching_radius
     #matching_radius = 7
-    kdtree = scipy.spatial.cKDTree(ref[:,0].reshape((-1,1)))
-    nearest_neighbor, i = kdtree.query(x=arc[:,-1].reshape((-1,1)), 
+    kdtree = scipy.spatial.cKDTree(ref[:,col_ref].reshape((-1,1)))
+    nearest_neighbor, i = kdtree.query(x=arc[:,col_arc].reshape((-1,1)), 
                                        k=1, # only find 1 nearest neighbor
                                        p=1, # use linear distance
                                        distance_upper_bound=matching_radius)
@@ -170,6 +173,7 @@ def find_wavelength_solution(matched, max_order=3):
     # between these two. This is what we are after
     #
     
+    numpy.savetxt("matched.for_final_fit", matched)
     ret = numpy.polynomial.polynomial.polyfit(
         x=matched[:,0],
         y=matched[:,6],
@@ -268,7 +272,8 @@ def find_matching_lines(ref_lines, lineinfo,
 
 if __name__ == "__main__":
 
-    logger = pysalt.mp_logging.setup_logging()
+    logger_setup = pysalt.mp_logging.setup_logging()
+    logger = logging.getLogger("BASE")
 
     filename = sys.argv[1]
 
@@ -329,8 +334,8 @@ if __name__ == "__main__":
     ############################################################################
 
     # based on the wavelength model from RSS translate x-positions into wavelengths
-    print dispersion
-    print lineinfo[:,0]
+    #print dispersion
+    #print lineinfo[:,0]
     wl = lineinfo[:,0] * dispersion + blue_edge
     lineinfo = numpy.append(lineinfo, wl.reshape((-1,1)), axis=1)
     numpy.savetxt("linecal", lineinfo)
@@ -340,12 +345,13 @@ if __name__ == "__main__":
     #
     lamp=hdulist[0].header['LAMPID'].strip().replace(' ', '')
     lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.txt" % lamp)
+    logger.info("Reading calibration line wavelengths from %s" % (lampfile))
     #lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.wav" % lamp)
     #lampfile=pysalt.get_data_filename("pysalt$data/linelists/Ar.salt")
     #lampfile="Ar.lines"
     lines = numpy.loadtxt(lampfile)
-    print lines.shape
-    print lines
+    #print lines.shape
+    #print lines
 
     # Now select only lines that are in the estimated range of our ARC spectrum
     in_range = (lines[:,0] > numpy.min(wl)) & (lines[:,0] < numpy.max(wl))
@@ -410,13 +416,18 @@ if __name__ == "__main__":
 
     matched = matched_cats[n_max]
     numpy.savetxt("matched.lines.best", matched)
-        
-    wls = find_wavelength_solution(matched, max_order=1)
+    
+    print "***************************\n"*5
+    print lineinfo.shape
+
+    wls = find_wavelength_solution(matched, max_order=3)
 
     # Now we have a best-match solution
     # Match lines again to see what the RMS is - use a small matching radius now
+    
     _linelist = numpy.array(lineinfo)
     numpy.savetxt("lineinfo.final", _linelist)
+    _linelist[:,1] = _linelist[:,0]
     _linelist[:,0] = numpy.polynomial.polynomial.polyval(_linelist[:,0], wls)
 
     # compute wl with polyval
@@ -426,7 +437,8 @@ if __name__ == "__main__":
     numpy.savetxt("final.2", numpy.polynomial.polynomial.polyval(_wl, wls))
     numpy.savetxt("final.3", _wl*wls[1]+wls[0])
 
-    final_match = match_line_catalogs(_linelist, ref_lines, matching_radius=5)
+    final_match = match_line_catalogs(_linelist, ref_lines, matching_radius=5, verbose=True,
+                                      col_arc=0, col_ref=0)
     numpy.savetxt("matched.cat.final", final_match)
 
     # Apply WLS to FITS header
@@ -452,5 +464,10 @@ if __name__ == "__main__":
     hdulist['SCI'].data = strip.T
     hdulist.writeto("test_out.fits", clobber=True)
 
-
-    pysalt.mp_logging.shutdown_logging(logger)
+    # Also save the original spectrum as text file
+    spec_x = numpy.polynomial.polynomial.polyval(numpy.arange(spec.shape[0]), wls).reshape((-1,1))
+    spec_combined = numpy.append(spec_x, spec.reshape((-1,1)), axis=1)
+    numpy.savetxt("spec.calib", spec_combined)
+    
+    
+    pysalt.mp_logging.shutdown_logging(logger_setup)
