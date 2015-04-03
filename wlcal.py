@@ -21,18 +21,24 @@ import pysalt
 
 
 import scipy.spatial
-
+import pysalt.mp_logging
+import logging
 
 def match_line_catalogs(arc, ref, matching_radius):
+
+    logger = logging.getLogger("MatchLineCat")
 
     #
     # For each line in the ARC catalog, find the closest match in the 
     # reference line list
     #
 
-    print arc
-    print ref
-    print matching_radius
+    logger.debug("#ARCs: %d  -- #REF: %d  --  MatchRadius: %.2f" % (
+        arc.shape[0], ref.shape[0], matching_radius))
+
+    # print arc
+    # print ref
+    # print matching_radius
     #matching_radius = 7
     kdtree = scipy.spatial.cKDTree(ref[:,0].reshape((-1,1)))
     nearest_neighbor, i = kdtree.query(x=arc[:,-1].reshape((-1,1)), 
@@ -42,11 +48,11 @@ def match_line_catalogs(arc, ref, matching_radius):
 
     i = numpy.array(i)
     i[i>=ref.shape[0]] = 0
-    print nearest_neighbor
-    print i
+    #print nearest_neighbor
+    #print i
 
-    print "arc/ref",arc.shape, ref.shape
-    print "nn/i",nearest_neighbor.shape, i.shape
+    #print "arc/ref",arc.shape, ref.shape
+    #print "nn/i",nearest_neighbor.shape, i.shape
     #
     # Now match both catalogs
     # 
@@ -58,10 +64,12 @@ def match_line_catalogs(arc, ref, matching_radius):
     # Now eliminate all "matches" without a sufficiently close match
     # (i.e. where nearest_neighbordistance == inf)
     #
-    print "before:",matched.shape
+    #print "before:",matched.shape
     good_match = numpy.isfinite(nearest_neighbor)
     matched = matched[good_match]
-    print "after:",matched.shape
+    #print "after:",matched.shape
+
+    logger.info("Found %3d matched lines" % (matched.shape[0]))
 
     return matched
 
@@ -153,7 +161,115 @@ def find_list_of_lines(spec, avg_width):
 
     return combined
 
+
+
+def find_wavelength_solution(matched, max_order=3):
+    #
+    # In the matched line list we have both X-column coordinates and 
+    # vacuum wavelengths. Thus we can establish a polynomial connection 
+    # between these two. This is what we are after
+    #
+    
+    ret = numpy.polynomial.polynomial.polyfit(
+        x=matched[:,0],
+        y=matched[:,6],
+        deg=max_order,
+        full=True,
+        w=matched[:,4], #use S/N for weighting
+        )
+
+    coeffs, rest = ret
+    residuals, rank, singular_values, rcond = rest
+
+    print "coeffs:", coeffs
+    print "residuals", residuals
+    print "rank:", rank
+    print "singular_values:", singular_values
+    print "rcond:",rcond
+    #print ret
+
+    return coeffs
+
+    
+
+
+def find_matching_lines(ref_lines, lineinfo, 
+                        dispersion, central_wavelength, reference_pixel_x,
+                        matching_radius,
+                        s2n_cutoff=30):
+    
+    print
+
+    logger = logging.getLogger("FindMatchingLines")
+    logger.info("Using d=%.6f A/px, central wavelength: %10.4f @ %8.2f px" % (
+        dispersion, central_wavelength, reference_pixel_x))
+
+    #
+    # Find average offset between arc lines and reference lines
+    # 
+    
+    # compute wavelength based on central wavelength and 
+    wl = (lineinfo[:,0]-reference_pixel_x) * dispersion + central_wavelength
+
+    # only select strong lines in the ARC spectrum
+    wl = wl[lineinfo[:,4] > s2n_cutoff]
+
+    #print ref_lines[:,0].reshape((-1,1)).T.shape
+    #print wl.reshape((-1,1)).shape
+    #numpy.savetxt("arc_lines", wl)
+    #numpy.savetxt("ref_lines", ref_lines[:,0])
+
+
+    differences = ref_lines[:,0].reshape((-1,1)).T - wl.reshape((-1,1))
+    #print differences.shape
+    numpy.savetxt("diffs", differences.flatten())
+
+    # Now find the most frequently found offset
+    # # Use kernel densities to avoid ambiguities between two adjacent bins
+
+    # allow for as much as 20% shift in wavelength coverage
+    # hopefully things are not THAT bad, but if: too bad for you
+    max_overlap = 0.2 * wl_range 
+
+    #print wl_range
+
+    n_bins = 2*max_overlap/matching_radius
+    logger.debug("Using %d bins, each%.2f A wide, to search for matches" % (n_bins, matching_radius))
+    count, bins = numpy.histogram(differences, bins=n_bins, range=[-max_overlap,max_overlap])
+    binwidth = bins[1] - bins[0]
+    hist  = numpy.empty((count.shape[0],3))
+    hist[:,0] = bins[:-1]
+    hist[:,1] = bins[1:]
+    hist[:,2] = count[:]
+    numpy.savetxt("histogram__%.4f" % (dispersion), hist)
+
+    # Now find the offset that allows to match the most lines
+    hist_max = numpy.argmax(count)
+    avg_shift = 0.5 * (bins[hist_max]+bins[hist_max+1])
+    
+    # This is the best shift to bring our line catalog in agreement 
+    # with the catalog of reference lines
+    logger.info("DISPERSION %.4f --> NEED SHIFT of ~ %.2f A" % (dispersion, avg_shift))
+
+    # Now improve the wavelength calibration of all found ARC lines by 
+    # applying the shift we just found
+    lineinfo[:,-1] += avg_shift
+
+    #
+    # Now match the two catalogs so we can derive an even better wavelength 
+    # calibration
+    #
+    matched = match_line_catalogs(lineinfo, ref_lines, matching_radius)
+    numpy.savetxt("matched.lines.%.4f" % (dispersion), matched)
+
+    return matched
+
+
+
 if __name__ == "__main__":
+
+    logger = pysalt.mp_logging.setup_logging()
+
     filename = sys.argv[1]
 
     hdulist = pyfits.open(filename)
@@ -224,6 +340,9 @@ if __name__ == "__main__":
     #
     lamp=hdulist[0].header['LAMPID'].strip().replace(' ', '')
     lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.txt" % lamp)
+    #lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.wav" % lamp)
+    #lampfile=pysalt.get_data_filename("pysalt$data/linelists/Ar.salt")
+    #lampfile="Ar.lines"
     lines = numpy.loadtxt(lampfile)
     print lines.shape
     print lines
@@ -234,57 +353,104 @@ if __name__ == "__main__":
     print ref_lines
 
     #
-    # Find average offset between arc lines and reference lines
-    # 
-    
-    # only select strong lines in the ARC spectrum
-    wl = wl[lineinfo[:,4] > 50]
-
-    print ref_lines[:,0].reshape((-1,1)).T.shape
-    print wl.reshape((-1,1)).shape
-
-    numpy.savetxt("arc_lines", wl)
-    numpy.savetxt("ref_lines", ref_lines[:,0])
-
-
-    differences = ref_lines[:,0].reshape((-1,1)).T - wl.reshape((-1,1))
-    print differences.shape
-    numpy.savetxt("diffs", differences.flatten())
-
-    # Now find the most frequently found offset
-    # # Use kernel densities to avoid ambiguities between two adjacent bins
-
-    # allow for as much as 20% shift in wavelength coverage
-    # hopefully things are not THAT bad, but if: too bad for you
-    max_overlap = 0.2 * wl_range 
-
-    print wl_range
-
-    count, bins = numpy.histogram(differences, bins=30, range=[-max_overlap,max_overlap])
-    binwidth = bins[1] - bins[0]
-    hist  = numpy.empty((count.shape[0],3))
-    hist[:,0] = bins[:-1]
-    hist[:,1] = bins[1:]
-    hist[:,2] = count[:]
-    numpy.savetxt("histogram", hist)
-
-    # Now find the offset that allows to match the most lines
-    hist_max = numpy.argmax(count)
-    avg_shift = 0.5 * (bins[hist_max]+bins[hist_max+1])
-    
-    # This is the best shift to bring our line catalog in agreement 
-    # with the catalog of reference lines
-    print "NEED SHIFT of ~",avg_shift,"A"
-
-    # Now improve the wavelength calibration of all found ARC lines by 
-    # applying the shift we just found
-    lineinfo[:,-1] += avg_shift
-
+    # Match lines between ARC spectrum and reference line list, 
+    # allowing for a small uncertainty in dispersion
     #
-    # Now match the two catalogs so we can derive an even better wavelength 
-    # calibration
-    #
-    matched = match_line_catalogs(lineinfo, ref_lines, binwidth)
-    numpy.savetxt("matched.lines", matched)
+
+    reference_pixel_x = 0.5 * spec.shape[0]
+
+    # dispersion was calculated above
+    # central wavelength 
+    central_wavelength = 0.5 * (blue_edge + red_edge)
+    max_dispersion_error = 0.10 # +/- 10% should be plenty
+    dispersion_search_steps = 0.01 # vary dispersion in 1% steps
+    n_dispersion_steps = (max_dispersion_error / dispersion_search_steps) * 2 + 1
+
+    # compute what dispersion factors we are trying 
+    trial_dispersions = numpy.linspace(1.0-max_dispersion_error, 
+                                      1.0+max_dispersion_error,
+                                      n_dispersion_steps) * dispersion 
+    n_matches = numpy.zeros((trial_dispersions.shape[0]))
+    matched_cats = [None] * trial_dispersions.shape[0]
+
+    for idx, _dispersion in enumerate(trial_dispersions):
+
+        # compute dispersion including the correction
+        #_dispersion = dispersion * disp_factor
+
+        # copy the original line info so we don't accidently overwrite important data
+        _lineinfo = numpy.array(lineinfo)
+
+        # find optimal line shifts and match lines 
+        # consider lines within 5A of each other matches
+        # --> this most likely will depend on spectral resolution and binning
+        matched_cat = find_matching_lines(ref_lines, _lineinfo, 
+                                          _dispersion, central_wavelength,
+                                          reference_pixel_x,
+                                          matching_radius = 5, 
+        )
+
+        # Save results for later picking of the best one
+        n_matches[idx] = matched_cat.shape[0]
+        matched_cats[idx] = matched_cat
+
+        numpy.savetxt("dispersion_scale_%.3f" % (_dispersion), matched_cat)
+
+    # Find the solution with the most matched lines
+    n_max = numpy.argmax(n_matches)
+    
+    print
+
+    print "most matched lines:", n_matches[n_max],
+    print "best dispersion: %f" % (trial_dispersions[n_max])
+
+    numpy.savetxt("matchcount", numpy.append(trial_dispersions.reshape((-1,1)),
+                                             n_matches.reshape((-1,1)),
+                                             axis=1))
+
+    matched = matched_cats[n_max]
+    numpy.savetxt("matched.lines.best", matched)
         
+    wls = find_wavelength_solution(matched, max_order=1)
 
+    # Now we have a best-match solution
+    # Match lines again to see what the RMS is - use a small matching radius now
+    _linelist = numpy.array(lineinfo)
+    numpy.savetxt("lineinfo.final", _linelist)
+    _linelist[:,0] = numpy.polynomial.polynomial.polyval(_linelist[:,0], wls)
+
+    # compute wl with polyval
+    _wl = lineinfo[:,0]
+    numpy.savetxt("final.1", _wl)
+
+    numpy.savetxt("final.2", numpy.polynomial.polynomial.polyval(_wl, wls))
+    numpy.savetxt("final.3", _wl*wls[1]+wls[0])
+
+    final_match = match_line_catalogs(_linelist, ref_lines, matching_radius=5)
+    numpy.savetxt("matched.cat.final", final_match)
+
+    # Apply WLS to FITS header
+    
+    hdr = hdulist['SCI'].header
+    hdr['CD1_1'] = wls[1]
+    hdr['CRVAL1'] = wls[0]
+    hdr['CRPIX1'] = 1.0
+    hdr['CTYPE1'] = 'PIXEL' #'LAMBDA'
+
+    # set the right reference line
+    hdr['CRPIX2'] = 1.
+    hdr['CRVAL2'] = line
+    hdr['CTYPE2'] = "PIXEL"
+    hdr['CD2_2'] = 1.0
+
+    for hdrname in ['CDELT1', 'CDELT2']:
+        if (hdrname in hdr): del hdr[hdrname]
+
+    # Write a wavelength calibrated strip spectrum
+    strip = numpy.repeat(spec.reshape((-1,1)), 100, axis=1)
+    print spec.shape, strip.shape
+    hdulist['SCI'].data = strip.T
+    hdulist.writeto("test_out.fits", clobber=True)
+
+
+    pysalt.mp_logging.shutdown_logging(logger)
