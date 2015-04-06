@@ -166,7 +166,7 @@ def find_list_of_lines(spec, avg_width):
 
 
 
-def find_wavelength_solution(matched, max_order=3):
+def compute_wavelength_solution(matched, max_order=3):
     #
     # In the matched line list we have both X-column coordinates and 
     # vacuum wavelengths. Thus we can establish a polynomial connection 
@@ -198,6 +198,7 @@ def find_wavelength_solution(matched, max_order=3):
 
 
 def find_matching_lines(ref_lines, lineinfo, 
+                        rss,
                         dispersion, central_wavelength, reference_pixel_x,
                         matching_radius,
                         s2n_cutoff=30):
@@ -207,6 +208,12 @@ def find_matching_lines(ref_lines, lineinfo,
     logger = logging.getLogger("FindMatchingLines")
     logger.info("Using d=%.6f A/px, central wavelength: %10.4f @ %8.2f px" % (
         dispersion, central_wavelength, reference_pixel_x))
+
+    blue_edge = rss.calc_bluewavelength() * mm_to_A
+    red_edge = rss.calc_redwavelength() * mm_to_A
+    wl_range = red_edge - blue_edge
+    print "blue:", blue_edge
+    print "red:", red_edge
 
     #
     # Find average offset between arc lines and reference lines
@@ -270,16 +277,13 @@ def find_matching_lines(ref_lines, lineinfo,
 
 
 
-if __name__ == "__main__":
 
-    logger_setup = pysalt.mp_logging.setup_logging()
-    logger = logging.getLogger("BASE")
+def find_wavelength_solution(filename, line):
 
-    filename = sys.argv[1]
+    logger = logging.getLogger("FindWLS")
 
     hdulist = pyfits.open(filename)
     hdulist.info()
-    line = int(sys.argv[2])
 
     avg_width = 10
     spec = extract_arc_spectrum(hdulist, line, avg_width)
@@ -391,6 +395,7 @@ if __name__ == "__main__":
         # consider lines within 5A of each other matches
         # --> this most likely will depend on spectral resolution and binning
         matched_cat = find_matching_lines(ref_lines, _lineinfo, 
+                                          rss,
                                           _dispersion, central_wavelength,
                                           reference_pixel_x,
                                           matching_radius = 5, 
@@ -420,7 +425,7 @@ if __name__ == "__main__":
     print "***************************\n"*5
     print lineinfo.shape
 
-    wls = find_wavelength_solution(matched, max_order=3)
+    wls = compute_wavelength_solution(matched, max_order=3)
 
     # Now we have a best-match solution
     # Match lines again to see what the RMS is - use a small matching radius now
@@ -469,5 +474,24 @@ if __name__ == "__main__":
     spec_combined = numpy.append(spec_x, spec.reshape((-1,1)), axis=1)
     numpy.savetxt("spec.calib", spec_combined)
     
-    
+
+    return {
+        'spec': spec,
+        'spec_combined': spec_combined,
+        'linelist_ref': lines,
+        'linelist_arc': _linelist,
+        }
+
+
+
+
+if __name__ == "__main__":
+
+    logger_setup = pysalt.mp_logging.setup_logging()
+
+    filename = sys.argv[1]
+    line = int(sys.argv[2])
+
+    wls_data = find_wavelength_solution(filename, line)
+
     pysalt.mp_logging.shutdown_logging(logger_setup)
