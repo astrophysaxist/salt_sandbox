@@ -149,7 +149,7 @@ def find_list_of_lines(spec, avg_width):
         x_pixels[real_peak].reshape((-1,1)), spec[real_peak].reshape((-1,1)), axis=1))
 
     # compute full S/N for each pixels
-    s2n = spec / (numpy.sqrt(spec*readnoise*2*avg_width) / (2*avg_width))
+    s2n = (spec - continuum) / (numpy.sqrt(spec*readnoise*2*avg_width) / (2*avg_width))
     numpy.savetxt("wl_real_peaks.sn", numpy.append(
         x_pixels[real_peak].reshape((-1,1)), s2n[real_peak].reshape((-1,1)), axis=1))
 
