@@ -72,7 +72,7 @@ def match_line_catalogs(arc, ref, matching_radius, verbose=False,
     matched = matched[good_match]
     #print "after:",matched.shape
 
-    logger.info("Found %3d matched lines" % (matched.shape[0]))
+    logger.debug("Found %3d matched lines" % (matched.shape[0]))
 
     return matched
 
@@ -82,16 +82,21 @@ def match_line_catalogs(arc, ref, matching_radius, verbose=False,
 
 def extract_arc_spectrum(hdulist, line=None, avg_width=10):
 
+    logger = logging.getLogger("ExtractSpec")
+
     # Find central line based on the dimensions
+    logger.info("Extracting average of +/- %d lines around y = %4d" % (
+            avg_width, line))
     center = hdulist['SCI'].data.shape[0] / 2 if line == None else line
 
     # average over a couple of lines
     spec = hdulist['SCI'].data[center-avg_width:center+avg_width,:]
-    print spec.shape
+    #print spec.shape
 
     avg_spec = numpy.average(spec, axis=0)
-    print avg_spec.shape
+    #print avg_spec.shape
 
+    logger.debug("done here!")
     numpy.savetxt("arcspec.dat", avg_spec)
     return avg_spec
 
@@ -167,12 +172,16 @@ def find_list_of_lines(spec, avg_width):
 
 
 def compute_wavelength_solution(matched, max_order=3):
+
+    logger = logging.getLogger("WLS_polyfit")
+
     #
     # In the matched line list we have both X-column coordinates and 
     # vacuum wavelengths. Thus we can establish a polynomial connection 
     # between these two. This is what we are after
     #
-    
+
+    logger.debug("Running a polynomial fit to %4d data points" % (matched.shape[0]))
     numpy.savetxt("matched.for_final_fit", matched)
     ret = numpy.polynomial.polynomial.polyfit(
         x=matched[:,0],
@@ -185,11 +194,12 @@ def compute_wavelength_solution(matched, max_order=3):
     coeffs, rest = ret
     residuals, rank, singular_values, rcond = rest
 
-    print "coeffs:", coeffs
-    print "residuals", residuals
-    print "rank:", rank
-    print "singular_values:", singular_values
-    print "rcond:",rcond
+    logger.info("Fit coeffs: %s" % (" ".join(["%.6e" % c for c in coeffs])))
+    logger.debug("residuals: %e" % (residuals))
+    logger.debug("rank: %d" % (rank))
+    logger.debug("singular_values: %s" % (" ".join(["%e" % sv for sv in singular_values])))
+    logger.debug("rcond: %f" % (rcond))
+
     #print ret
 
     return coeffs
@@ -203,17 +213,16 @@ def find_matching_lines(ref_lines, lineinfo,
                         matching_radius,
                         s2n_cutoff=30):
     
-    print
+    #print
 
     logger = logging.getLogger("FindMatchingLines")
-    logger.info("Using d=%.6f A/px, central wavelength: %10.4f @ %8.2f px" % (
+    logger.debug("Using d=%.6f A/px, central wavelength: %10.4f @ %8.2f px" % (
         dispersion, central_wavelength, reference_pixel_x))
 
     blue_edge = rss.calc_bluewavelength() * mm_to_A
     red_edge = rss.calc_redwavelength() * mm_to_A
     wl_range = red_edge - blue_edge
-    print "blue:", blue_edge
-    print "red:", red_edge
+    logger.debug("Estimated wavelength range: %f -- %f A" % (blue_edge, red_edge))
 
     #
     # Find average offset between arc lines and reference lines
@@ -260,7 +269,7 @@ def find_matching_lines(ref_lines, lineinfo,
     
     # This is the best shift to bring our line catalog in agreement 
     # with the catalog of reference lines
-    logger.info("DISPERSION %.4f --> NEED SHIFT of ~ %.2f A" % (dispersion, avg_shift))
+    logger.debug("DISPERSION %.4f --> NEED SHIFT of ~ %.2f A" % (dispersion, avg_shift))
 
     # Now improve the wavelength calibration of all found ARC lines by 
     # applying the shift we just found
@@ -273,6 +282,9 @@ def find_matching_lines(ref_lines, lineinfo,
     matched = match_line_catalogs(lineinfo, ref_lines, matching_radius)
     numpy.savetxt("matched.lines.%.4f" % (dispersion), matched)
 
+    logger.info("Trying dispersion %8.4f A/px   ===>   shift: %8.2fA, #matches: %3d" % (
+            dispersion, avg_shift, matched.shape[0]))
+
     return matched
 
 
@@ -283,7 +295,7 @@ def find_wavelength_solution(filename, line):
     logger = logging.getLogger("FindWLS")
 
     hdulist = pyfits.open(filename)
-    hdulist.info()
+    #hdulist.info()
 
     avg_width = 10
     spec = extract_arc_spectrum(hdulist, line, avg_width)
@@ -300,30 +312,30 @@ def find_wavelength_solution(filename, line):
         xpos=-0.30659999999999998, ypos=0.0117, wavelength=None)
 
     central_wl = rss.calc_centralwavelength() * mm_to_A
-    print central_wl
+    #print central_wl
 
     blue_edge = rss.calc_bluewavelength() * mm_to_A
     red_edge = rss.calc_redwavelength() * mm_to_A
     wl_range = red_edge - blue_edge
-    print "blue:", blue_edge
-    print "red:", red_edge
+    #print "blue:", blue_edge
+    #print "red:", red_edge
 
     dispersion = (rss.calc_redwavelength()-rss.calc_bluewavelength())*mm_to_A/spec.shape[0]
-    print "dispersion: A/px", dispersion
+    #print "dispersion: A/px", dispersion
     
     #print "ang.dispersion:", rss.calc_angdisp(rss.beta())
-    print "ang.dispersion:", rss.calc_angdisp(-rss.beta())
+    #print "ang.dispersion:", rss.calc_angdisp(-rss.beta())
 
     pixelsize = 15e-6
-    print "lin.dispersion:", rss.calc_lindisp(rss.beta())
-    print "lin.dispersion:", rss.calc_lindisp(rss.beta()) / (mm_to_A*pixelsize)
+    #print "lin.dispersion:", rss.calc_lindisp(rss.beta())
+    #print "lin.dispersion:", rss.calc_lindisp(rss.beta()) / (mm_to_A*pixelsize)
 
-    print "resolution @ central w.l.:", rss.calc_resolution(
-        w=rss.calc_centralwavelength(), 
-        alpha=rss.alpha(), 
-        beta=-rss.beta())
+    #print "resolution @ central w.l.:", rss.calc_resolution(
+    #     w=rss.calc_centralwavelength(), 
+    #     alpha=rss.alpha(), 
+    #     beta=-rss.beta())
     
-    print "resolution element:", rss.calc_resolelement(rss.alpha(), -rss.beta()) * mm_to_A
+    # print "resolution element:", rss.calc_resolelement(rss.alpha(), -rss.beta()) * mm_to_A
 
     #
     # Now find a list of strong lines
@@ -349,7 +361,9 @@ def find_wavelength_solution(filename, line):
     #
     lamp=hdulist[0].header['LAMPID'].strip().replace(' ', '')
     lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.txt" % lamp)
-    logger.info("Reading calibration line wavelengths from %s" % (lampfile))
+    _, fn_only = os.path.split(lampfile)
+    logger.info("Reading calibration line wavelengths from data->%s" % (fn_only))
+    logger.debug("Full path to lamp line list: %s" % (lampfile))
     #lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.wav" % lamp)
     #lampfile=pysalt.get_data_filename("pysalt$data/linelists/Ar.salt")
     #lampfile="Ar.lines"
@@ -360,7 +374,9 @@ def find_wavelength_solution(filename, line):
     # Now select only lines that are in the estimated range of our ARC spectrum
     in_range = (lines[:,0] > numpy.min(wl)) & (lines[:,0] < numpy.max(wl))
     ref_lines = lines[in_range]
-    print ref_lines
+    logger.debug("Found these lines for fitting:\n%s" % (
+            "\n".join(["%10.4f" % l for l in ref_lines[:,0]])))
+    #print ref_lines
 
     #
     # Match lines between ARC spectrum and reference line list, 
@@ -410,10 +426,12 @@ def find_wavelength_solution(filename, line):
     # Find the solution with the most matched lines
     n_max = numpy.argmax(n_matches)
     
-    print
+    #print
 
-    print "most matched lines:", n_matches[n_max],
-    print "best dispersion: %f" % (trial_dispersions[n_max])
+    #print "most matched lines:", n_matches[n_max],
+    #print "best dispersion: %f" % (trial_dispersions[n_max])
+    logger.info("Choosing best solution: %4d for dispersion %8.4f A/px" % (
+            n_matches[n_max], trial_dispersions[n_max]))
 
     numpy.savetxt("matchcount", numpy.append(trial_dispersions.reshape((-1,1)),
                                              n_matches.reshape((-1,1)),
@@ -422,9 +440,10 @@ def find_wavelength_solution(filename, line):
     matched = matched_cats[n_max]
     numpy.savetxt("matched.lines.best", matched)
     
-    print "***************************\n"*5
-    print lineinfo.shape
+    # print "***************************\n"*5
+    # print lineinfo.shape
 
+    logger.info("Computing an analytical wavelength calibration...")
     wls = compute_wavelength_solution(matched, max_order=3)
 
     # Now we have a best-match solution
@@ -465,8 +484,9 @@ def find_wavelength_solution(filename, line):
 
     # Write a wavelength calibrated strip spectrum
     strip = numpy.repeat(spec.reshape((-1,1)), 100, axis=1)
-    print spec.shape, strip.shape
+    # print spec.shape, strip.shape
     hdulist['SCI'].data = strip.T
+    if (os.path.isfile("test_out.fits")): os.remove("test_out.fits")
     hdulist.writeto("test_out.fits", clobber=True)
 
     # Also save the original spectrum as text file
