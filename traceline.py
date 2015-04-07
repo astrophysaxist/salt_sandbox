@@ -195,8 +195,8 @@ if __name__ == "__main__":
     fitsdata = hdulist['SCI'].data.T
     fitsdata[fitsdata <= 0] = numpy.NaN
 
-    logger.info("Applying 5x5 pixel gauss filter")
-    fitsdata = scipy.ndimage.filters.gaussian_filter(fitsdata, 5, 
+    logger.info("Applying 5x0 pixel gauss filter")
+    fitsdata = scipy.ndimage.filters.gaussian_filter(fitsdata, (5,0), 
                                           mode='constant', cval=0,
                                           )
     pyfits.PrimaryHDU(data=fitsdata.T).writeto("image_smooth.fits", clobber=True)
