@@ -500,6 +500,7 @@ def find_wavelength_solution(filename, line):
         'spec_combined': spec_combined,
         'linelist_ref': lines,
         'linelist_arc': _linelist,
+        'line': line,
         }
 
 
