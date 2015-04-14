@@ -501,6 +501,7 @@ def find_wavelength_solution(filename, line):
         'linelist_ref': lines,
         'linelist_arc': _linelist,
         'line': line,
+        'wl_fit_coeffs': wls,
         }
 
 
