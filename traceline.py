@@ -246,6 +246,69 @@ image\
 
     if (not ds9_region_file == None): ds9_region.close()
 
+    #
+    # Assemble the return data
+    #
+
+    # compute the wavelength of this line
+    print 
+    wl = numpy.polynomial.polynomial.polyval(wls_data['linelist_arc'][line_idx,1], wls_data['wl_fit_coeffs'])
+    linetrace = numpy.append(all_row_data,
+                             numpy.ones((all_row_data.shape[0],1))*wl, 
+                             axis=1)
+
+    return linetrace
+
+
+
+
+
+
+# from http://stackoverflow.com/questions/7997152/python-3d-polynomial-surface-fit-order-dependent
+    # x = np.random.random(numdata)
+    # y = np.random.random(numdata)
+    # z = x**2 + y**2 + 3*x**3 + y + np.random.random(numdata)
+
+    # # Fit a 3rd order, 2d polynomial
+    # m = polyfit2d(x,y,z)
+
+    # # Evaluate it on a grid...
+    # nx, ny = 20, 20
+    # xx, yy = np.meshgrid(np.linspace(x.min(), x.max(), nx), 
+    #                      np.linspace(y.min(), y.max(), ny))
+    # zz = polyval2d(xx, yy, m)
+
+    # # Plot
+    # plt.imshow(zz, extent=(x.min(), y.max(), x.max(), y.min()))
+    # plt.scatter(x, y, c=z)
+    # plt.show()
+
+import itertools
+import matplotlib.pyplot as plt
+def polyfit2d(x, y, z, order=3):
+    ncols = (order + 1)**2
+    G = numpy.zeros((x.size, ncols))
+    ij = itertools.product(range(order+1), range(order+1))
+    for k, (i,j) in enumerate(ij):
+        G[:,k] = x**i * y**j
+    m, _, _, _ = numpy.linalg.lstsq(G, z)
+    return m
+
+def polyval2d(x, y, m):
+    order = int(numpy.sqrt(len(m))) - 1
+    ij = itertools.product(range(order+1), range(order+1))
+    z = numpy.zeros_like(x)
+    for a, (i,j) in zip(m, ij):
+        z += a * x**i * y**j
+    return z
+
+
+
+
+
+
+
+
 
 if __name__ == "__main__":
 
@@ -294,10 +357,42 @@ if __name__ == "__main__":
     # Also eliminate all lines with nearby companions that might cause problems
     sort_sn = numpy.argsort(wls_data['linelist_arc'][:,4])[::-1]
     print wls_data['linelist_arc'][sort_sn][:10,4]
+
+    traces = None
     for i in range(15):
-        trace_single_line(fitsdata, wls_data, sort_sn[i],
+        linetrace = trace_single_line(fitsdata, wls_data, sort_sn[i],
                            ds9_region_file="ds9_arc.reg")
-          
+        print linetrace.shape
+        numpy.savetxt("LT.%d" % i, linetrace)
+
+        traces = linetrace if traces == None else \
+                 numpy.append(traces, linetrace, axis=0)
+        #traces.append(linetrace)
+
+    print traces
+    traces_2d = numpy.array(traces)
+    print traces_2d.shape
+    numpy.savetxt("traces_2d.dmp", traces_2d)
+
+    #
+    # Now we have a full array of X, Y, and wavelength positions.
+    #
+    m = polyfit2d(x=traces[:,1],
+                  y=traces[:,0],
+                  z=traces[:,4],
+                  order=2)
+
+    x=traces[:,1]
+    y=traces[:,0]
+    z=traces[:,4]
+    nx, ny = 20, 20
+    xx, yy = numpy.meshgrid(numpy.linspace(x.min(), x.max(), nx), 
+                            numpy.linspace(y.min(), y.max(), ny))
+    zz = polyval2d(xx, yy, m)
+    plt.imshow(zz, extent=(x.min(), x.max(), y.min(), y.max()))
+    plt.scatter(x, y, c=z, linewidth=0)
+    plt.show()
+
     # trace_single_line(fitsdata, wls_data, max_s2n,
     #                   ds9_region_file="ds9_arc.reg")
 
