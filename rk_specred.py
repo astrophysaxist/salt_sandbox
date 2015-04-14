@@ -16,11 +16,16 @@ and up to date.
 
 import os, sys, glob, shutil
 
-import numpy as np
+import numpy
 import pyfits
 from scipy.ndimage.filters import median_filter
 import bottleneck
 import scipy.interpolate
+numpy.seterr(divide='ignore', invalid='ignore')
+
+# Disable nasty and useless RankWarning when spline fitting
+import warnings
+warnings.simplefilter('ignore', numpy.RankWarning)
 
 # sys.path.insert(1, "/work/pysalt/")
 # sys.path.insert(1, "/work/pysalt/plugins")
@@ -143,7 +148,7 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
     if usedb:
         obsdate=saltkey.get('DATE-OBS', struct[0])
         obsdate=int('%s%s%s' % (obsdate[0:4],obsdate[5:7], obsdate[8:]))
-        xkey=np.array(xdict.keys())
+        xkey=numpy.array(xdict.keys())
         date=xkey[abs(xkey-obsdate).argmin()]
         xcoeff=xdict[date]
     else:
@@ -233,12 +238,10 @@ def get_integrated_spectrum(hdu_rect, filename):
 
 
 
-
-
 #################################################################################
 #################################################################################
 #################################################################################
-def find_slit_profile(integrated_intensity, filename):
+def find_slit_profile(hdulist, filename, source_region=[1400,2600]):
     """
 
     Starting with the intensity profile along the slit, reject all likely 
@@ -252,6 +255,22 @@ def find_slit_profile(integrated_intensity, filename):
 
     _,fb = os.path.split(filename)
     logger = logging.getLogger("FindSlitProf")
+
+    #
+    # Get binning information
+    #
+    binx, biny = pysalt.get_binning(hdulist)
+    if (binx == None):
+        logger.error("Can't find binning information. Does header CCDSUM exist?")
+        return None
+
+    #
+    # Get integrated slit profile
+    #
+    integrated_intensity = bottleneck.nansum(hdulist['SCI'].data.astype(numpy.float32), axis=1)
+    logger.info("Integrated intensity: covers %d pixels along slit" % (integrated_intensity.shape[0]))
+    # pyfits.PrimaryHDU(data=integrated_intensity).writeto()
+    numpy.savetxt("1d_%s.cat" % (fb[:-5]), integrated_intensity)
 
     #
     # First of all, reject all pixels with zero fluxes
@@ -305,17 +324,26 @@ def find_slit_profile(integrated_intensity, filename):
     # avoiding the central area where the source likely is located
     #
     x = numpy.arange(filtered_bg.shape[0])
-    t = numpy.linspace(200, 1800, 50)
-    avoidance = (t>700) & (t<1300)
-    do_not_fit = ((x<700) | (x>1300)) & skymask
+    print 400/biny, 3600/biny, 100/biny
+
+    print "X:", filtered_bg.shape
+    do_not_fit = ((x<1400/biny) | (x>2600/biny)) & skymask
+
+    t = numpy.linspace(numpy.min(x[do_not_fit])+1, numpy.max(x[do_not_fit])-1, 50) #100/biny)
+    avoidance = (t>source_region[0]/biny) & (t<source_region[1]/biny)
     t = t[~avoidance]
+    print t
+
     w = numpy.ones(filtered_bg.shape[0])
     w[~skymask] = 0
+
+    print "xrange:",numpy.min(x[do_not_fit]), numpy.max(x[do_not_fit])
+    numpy.savetxt("1d_bg_%s.cat.basepoints" % (fb[:-5]), t, "%.2f")
+    numpy.savetxt("1d_bg_%s.cat.wt" % (fb[:-5]), w)
     lsq_spline = scipy.interpolate.LSQUnivariateSpline(
         x=x[do_not_fit], y=filtered_bg[do_not_fit], t=t, 
         w=None, bbox=[None, None], k=2)
     numpy.savetxt("1d_bg_%s.cat.fit" % (fb[:-5]), lsq_spline(x))
-    numpy.savetxt("1d_bg_%s.cat.wt" % (fb[:-5]), w)
 
     #
     # Also try fitting a polynomial to the function
@@ -508,7 +536,10 @@ def specred(rawdir, prodir,
     logger.info("Applying wavelength solution to OBJECT frames")
     for idx, filename in enumerate(obslog['OBJECT']):
         _, fb = os.path.split(filename)
-        hdulist = open(filename)
+        hdulist = pyfits.open(filename)
+
+        binx, biny = pysalt.get_binning(hdulist)
+        logger.info("Using binning of %d x %d (spectral/spatial)" % (binx, biny))
 
         mosaic_filename = "OBJ_raw__%s" % (fb)
         out_filename = "OBJ_%s" % (fb)
@@ -546,8 +577,12 @@ def specred(rawdir, prodir,
         hdu_rect = pyfits.open(out_filename)
         hdu_rect.info()
 
-        intspec = get_integrated_spectrum(hdu_rect, out_filename)
-        slitprof, skymask = find_slit_profile(intspec, out_filename)
+        src_region = [1500,2400] # Jay
+        src_region = [1850,2050] # Greg
+
+        #intspec = get_integrated_spectrum(hdu_rect, out_filename)
+        #slitprof, skymask = find_slit_profile(hdu_rect, out_filename) # Jay
+        slitprof, skymask = find_slit_profile(hdu_rect, out_filename, src_region)  # Greg
         print skymask.shape[0]
 
         hdu_rect['SCI'].data /= slitprof
@@ -559,7 +594,7 @@ def specred(rawdir, prodir,
         #
         # Block out the central region of the chip as object
         #
-        skymask[750:1300] = False
+        skymask[src_region[0]/biny:src_region[1]/biny] = False
         sky_lines = bottleneck.nanmedian(
             hdu_rect['SCI'].data[skymask].astype(numpy.float64),
             axis=0)
@@ -816,17 +851,17 @@ def specred(rawdir, prodir,
 def speccombine(spec_list, obsdate):
    """Combine N spectra"""
 
-   w1,f1, e1=np.loadtxt(spec_list[0], usecols=(0,1,2), unpack=True)
+   w1,f1, e1=numpy.loadtxt(spec_list[0], usecols=(0,1,2), unpack=True)
 
    w=w1
    f=1.0*f1
    e=e1**2
 
    for sfile in spec_list[1:]:
-      w2,f2, e2=np.loadtxt(sfile, usecols=(0,1,2), unpack=True)
-      if2=np.interp(w1, w2, f2)
-      ie2=np.interp(w1, w2, e2)
-      f2=f2*np.median(f1/if2)
+      w2,f2, e2=numpy.loadtxt(sfile, usecols=(0,1,2), unpack=True)
+      if2=numpy.interp(w1, w2, f2)
+      ie2=numpy.interp(w1, w2, e2)
+      f2=f2*numpy.median(f1/if2)
       f+=if2
       e+=ie2**2
 
@@ -843,9 +878,9 @@ def speccombine(spec_list, obsdate):
 def cleanspectra(sfile, grow=6):
     """Remove possible bad pixels"""
     try:
-        w,f,e=np.loadtxt(sfile, usecols=(0,1,2), unpack=True)
+        w,f,e=numpy.loadtxt(sfile, usecols=(0,1,2), unpack=True)
     except:
-        w,f=np.loadtxt(sfile, usecols=(0,1), unpack=True)
+        w,f=numpy.loadtxt(sfile, usecols=(0,1), unpack=True)
         e=f*0.0+f.std()
     
     m=(f*0.0)+1
@@ -868,19 +903,19 @@ def normalizespectra(sfile, compfile):
     """Normalize spectra by the comparison object"""
 
     #read in the spectra
-    w,f,e=np.loadtxt(sfile, usecols=(0,1,2), unpack=True)
+    w,f,e=numpy.loadtxt(sfile, usecols=(0,1,2), unpack=True)
    
     #read in the comparison spectra
     cfile=sfile.replace('MCG-6-30-15', 'COMP')
     print cfile
-    wc,fc,ec=np.loadtxt(cfile, usecols=(0,1,2), unpack=True)
+    wc,fc,ec=numpy.loadtxt(cfile, usecols=(0,1,2), unpack=True)
 
     #read in the base star
-    ws,fs,es=np.loadtxt(compfile, usecols=(0,1,2), unpack=True)
+    ws,fs,es=numpy.loadtxt(compfile, usecols=(0,1,2), unpack=True)
  
     #calcualte the normalization
-    ifc=np.interp(ws, wc, fc) 
-    norm=np.median(fs/ifc)
+    ifc=numpy.interp(ws, wc, fc) 
+    norm=numpy.median(fs/ifc)
     print norm
     f=norm*f
     e=norm*e
@@ -914,7 +949,7 @@ def createspectra(img, obsdate, minsize=5, thresh=3, skysection=[800,1000], smoo
     #replace the zeros with the average from the frame
     if maskzeros:
        mean,std=iterstat(data[data>0])
-       rdata=np.random.normal(mean, std, size=data.shape)
+       rdata=numpy.random.normal(mean, std, size=data.shape)
        print mean, std
        data[data<=0]=rdata[data<=0]
 
