@@ -358,6 +358,9 @@ if __name__ == "__main__":
     sort_sn = numpy.argsort(wls_data['linelist_arc'][:,4])[::-1]
     print wls_data['linelist_arc'][sort_sn][:10,4]
 
+    # Reset ds9_arc
+    pysalt.clobberfile("ds9_arc.reg")
+
     traces = None
     for i in range(15):
         linetrace = trace_single_line(fitsdata, wls_data, sort_sn[i],
@@ -377,22 +380,64 @@ if __name__ == "__main__":
     #
     # Now we have a full array of X, Y, and wavelength positions.
     #
+
     m = polyfit2d(x=traces[:,1],
                   y=traces[:,0],
                   z=traces[:,4],
                   order=2)
 
-    x=traces[:,1]
-    y=traces[:,0]
-    z=traces[:,4]
-    nx, ny = 20, 20
-    xx, yy = numpy.meshgrid(numpy.linspace(x.min(), x.max(), nx), 
-                            numpy.linspace(y.min(), y.max(), ny))
-    zz = polyval2d(xx, yy, m)
-    plt.imshow(zz, extent=(x.min(), x.max(), y.min(), y.max()))
-    plt.scatter(x, y, c=z, linewidth=0)
-    plt.show()
+    plot_solution = False
+    if (plot_solution):
+        x=traces[:,1]
+        y=traces[:,0]
+        z=traces[:,4]
+        nx, ny = 20, 20
+        xx, yy = numpy.meshgrid(numpy.linspace(x.min(), x.max(), nx), 
+                                numpy.linspace(y.min(), y.max(), ny))
+        zz = polyval2d(xx, yy, m)
+        plt.imshow(zz, extent=(x.min(), x.max(), y.min(), y.max()))
+        plt.scatter(x, y, c=z, linewidth=0)
+        plt.show()
 
+    #
+    # Go on to compute a full grid of wavelengths, with one 
+    # position for each pixel in the input frame
+    #
+
+    logger.info("Computing full 2-D wavelength map for frame")
+    arc_x, arc_y = numpy.indices(fitsdata.shape)
+
+    line = wls_data['line']
+    print line
+
+    #stripwidth = 250
+    #pick_strip = (arc_y > line-stripwidth) & (arc_y < line+stripwidth)
+
+    wl_data = polyval2d(arc_x.astype(numpy.float32), arc_y.astype(numpy.float32), m)
+    pyfits.PrimaryHDU(data=wl_data.T).writeto(
+        "image_wavelengths.fits", clobber=True)    
+
+    # Now merge data and wavelengths and write to file
+    logger.info("dumping wavelenghts and fluxes into file")
+    merged = numpy.append(wl_data.reshape((-1,1)),
+                          hdulist['SCI'].data.T.reshape((-1,1)),
+                          #fitsdata[pick_strip].reshape((-1,1)),
+                          axis=1)
+    # merged = numpy.append(wl_data[pick_strip].reshape((-1,1)),
+    #                       hdulist['SCI'].data.T[pick_strip].reshape((-1,1)),
+    #                       #fitsdata[pick_strip].reshape((-1,1)),
+    #                       axis=1)
+    si = numpy.argsort(merged[:,0])
+    merged = merged[si]
+
+    in_range = (merged[:,0] > 5930) & (merged[:,1] < 6000)
+    merged = merged[in_range]
+
+    print merged.shape
+    logger.info("dumping to file")
+    numpy.savetxt("wl+flux.dump", merged)
+
+    
     # trace_single_line(fitsdata, wls_data, max_s2n,
     #                   ds9_region_file="ds9_arc.reg")
 
