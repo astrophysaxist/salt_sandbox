@@ -28,6 +28,7 @@ import math
 
 import wlcal
 import pickle
+from rk_specred import find_slit_profile
 
 
 def trace_arc(data,
@@ -337,8 +338,29 @@ if __name__ == "__main__":
     arclines = wls_data['linelist_arc']
     max_s2n = numpy.argmax(arclines[:,4])
 
+
+    #
+    # Using routines from the spectral reduction module, flatten ARC spectrum 
+    # in slit direction (vertical, along Y axis) to make arcs roughly the same 
+    # brightness along their entire length
+    #
+    logger.info("Creating slit profile for normalization")
+    slitprofile_fit, mask, slitprofile = find_slit_profile(hdulist, filename, source_region=None)
+    print "SLITPROFILE:", slitprofile.shape, hdulist['SCI'].data.shape
+    numpy.savetxt("slitprofile.dump", slitprofile)
+
+    #
     # For debugging, extract a data block around the position of the line
-    fitsdata = hdulist['SCI'].data.T
+    #
+    # also apply the slitprofile correction to minimize brightness variations 
+    # along the slit
+    #
+    fitsdata = (hdulist['SCI'].data / slitprofile).T
+    
+    #truncate to cut off rough edges
+    fitsdata = fitsdata[:, 60:1985]
+
+    pyfits.PrimaryHDU(data=fitsdata.T).writeto("image_slitflattened.fits", clobber=True)
     #fitsdata[fitsdata <= 0] = numpy.NaN
 
     logger.info("Applying 5x0 pixel gauss filter")
@@ -346,9 +368,12 @@ if __name__ == "__main__":
                                           mode='constant', cval=0,
                                           )
     fitsdata_gf[fitsdata <= 0] = numpy.NaN
-    fitsdata = fitsdata_gf
+    fitsdata[fitsdata <= 0] = numpy.NaN
+    #fitsdata = fitsdata_gf
 
     pyfits.PrimaryHDU(data=fitsdata.T).writeto("image_smooth.fits", clobber=True)
+
+    #print "done!"; sys.exit(0)
 
     # trace_single_line(fitsdata, wls_data, 21,
     #                   ds9_region_file="ds9_arc.reg")
@@ -363,7 +388,7 @@ if __name__ == "__main__":
 
     traces = None
     for i in range(15):
-        linetrace = trace_single_line(fitsdata, wls_data, sort_sn[i],
+        linetrace = trace_single_line(fitsdata_gf, wls_data, sort_sn[i],
                            ds9_region_file="ds9_arc.reg")
         print linetrace.shape
         numpy.savetxt("LT.%d" % i, linetrace)
@@ -410,32 +435,34 @@ if __name__ == "__main__":
     line = wls_data['line']
     print line
 
-    #stripwidth = 250
-    #pick_strip = (arc_y > line-stripwidth) & (arc_y < line+stripwidth)
+    for stripwidth in [5,25,75,150,300, 600]:
+        # stripwidth = 75
+        pick_strip = (arc_y > line-stripwidth) & (arc_y < line+stripwidth)
 
-    wl_data = polyval2d(arc_x.astype(numpy.float32), arc_y.astype(numpy.float32), m)
-    pyfits.PrimaryHDU(data=wl_data.T).writeto(
-        "image_wavelengths.fits", clobber=True)    
+        wl_data = polyval2d(arc_x.astype(numpy.float32), arc_y.astype(numpy.float32), m)
+        pyfits.PrimaryHDU(data=wl_data.T).writeto(
+            "image_wavelengths.fits", clobber=True)    
 
-    # Now merge data and wavelengths and write to file
-    logger.info("dumping wavelenghts and fluxes into file")
-    merged = numpy.append(wl_data.reshape((-1,1)),
-                          hdulist['SCI'].data.T.reshape((-1,1)),
-                          #fitsdata[pick_strip].reshape((-1,1)),
-                          axis=1)
-    # merged = numpy.append(wl_data[pick_strip].reshape((-1,1)),
-    #                       hdulist['SCI'].data.T[pick_strip].reshape((-1,1)),
-    #                       #fitsdata[pick_strip].reshape((-1,1)),
-    #                       axis=1)
-    si = numpy.argsort(merged[:,0])
-    merged = merged[si]
+        # Now merge data and wavelengths and write to file
+        logger.info("dumping wavelenghts and fluxes into file")
+        # merged = numpy.append(wl_data.reshape((-1,1)),
+        #                       fitsdata.T.reshape((-1,1)),
+        #                       #hdulist['SCI'].data.T.reshape((-1,1)),
+        #                       #fitsdata[pick_strip].reshape((-1,1)),
+        #                       axis=1)
+        merged = numpy.append(wl_data[pick_strip].reshape((-1,1)),
+        #                       hdulist['SCI'].data.T[pick_strip].reshape((-1,1)),
+                              fitsdata[pick_strip].reshape((-1,1)),
+                              axis=1)
+        si = numpy.argsort(merged[:,0])
+        merged = merged[si]
 
-    in_range = (merged[:,0] > 5930) & (merged[:,1] < 6000)
-    merged = merged[in_range]
+        in_range = (merged[:,0] > 5930) & (merged[:,0] < 6000)
+        merged = merged[in_range]
 
-    print merged.shape
-    logger.info("dumping to file")
-    numpy.savetxt("wl+flux.dump", merged)
+        print merged.shape
+        logger.info("dumping to file")
+        numpy.savetxt("wl+flux.dump.%D", merged, stripwidth)
 
     
     # trace_single_line(fitsdata, wls_data, max_s2n,
