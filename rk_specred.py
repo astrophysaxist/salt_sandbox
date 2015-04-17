@@ -323,26 +323,38 @@ def find_slit_profile(hdulist, filename, source_region=[1400,2600]):
     # To smooth things out even better, fit a very low order spline, 
     # avoiding the central area where the source likely is located
     #
+    # Use 50 basepoints for the fitting polynomial
     x = numpy.arange(filtered_bg.shape[0])
     print 400/biny, 3600/biny, 100/biny
 
-    print "X:", filtered_bg.shape
-    do_not_fit = ((x<1400/biny) | (x>2600/biny)) & skymask
+    if (not source_region == None):
+        print "X:", filtered_bg.shape
+        do_not_fit = ((x<1400/biny) | (x>2600/biny)) & skymask
 
-    t = numpy.linspace(numpy.min(x[do_not_fit])+1, numpy.max(x[do_not_fit])-1, 50) #100/biny)
-    avoidance = (t>source_region[0]/biny) & (t<source_region[1]/biny)
-    t = t[~avoidance]
-    print t
+        t = numpy.linspace(numpy.min(x[do_not_fit])+1, numpy.max(x[do_not_fit])-1, 50) #100/biny)
+        avoidance = (t>source_region[0]/biny) & (t<source_region[1]/biny)
+        t = t[~avoidance]
+        print t
+    else:
+        do_not_fit = skymask
+        t = numpy.linspace(numpy.min(x)+1, numpy.max(x)-1, 50)
+        
+    print "Using spline fitting base points\n",t
 
     w = numpy.ones(filtered_bg.shape[0])
     w[~skymask] = 0
-
+    numpy.savetxt("slitprofile.weights", w)
+    numpy.savetxt("slitprofile.do_not_fit", do_not_fit)
+    
     print "xrange:",numpy.min(x[do_not_fit]), numpy.max(x[do_not_fit])
     numpy.savetxt("1d_bg_%s.cat.basepoints" % (fb[:-5]), t, "%.2f")
     numpy.savetxt("1d_bg_%s.cat.wt" % (fb[:-5]), w)
+    # lsq_spline = scipy.interpolate.LSQUnivariateSpline(
+    #     x=x[do_not_fit], y=filtered_bg[do_not_fit], t=t, 
+    #     w=None, bbox=[None, None], k=2)
     lsq_spline = scipy.interpolate.LSQUnivariateSpline(
-        x=x[do_not_fit], y=filtered_bg[do_not_fit], t=t, 
-        w=None, bbox=[None, None], k=2)
+        x=x, y=filtered_bg, t=t, 
+        w=w, bbox=[None, None], k=2)
     numpy.savetxt("1d_bg_%s.cat.fit" % (fb[:-5]), lsq_spline(x))
 
     #
@@ -354,13 +366,14 @@ def find_slit_profile(hdulist, filename, source_region=[1400,2600]):
     # Now normalize this line profile so we can use it to flatten out the slit image
     #
     avg_flux = bottleneck.nanmean(filtered_bg)
+    print "average slit across slit profile:", avg_flux
 
     #slit_flattening = filtered_bg / avg_flux
     slit_flattening = lsq_spline(x) / avg_flux
     # Fill in gaps with ones
     slit_flattening[numpy.isnan(slit_flattening)] = 1.0
 
-    return slit_flattening.reshape((-1,1)), skymask
+    return slit_flattening.reshape((-1,1)), skymask, filtered_bg.reshape((-1,1))/avg_flux
 
 
 
