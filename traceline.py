@@ -435,13 +435,17 @@ if __name__ == "__main__":
     line = wls_data['line']
     print line
 
+    wl_data = polyval2d(arc_x.astype(numpy.float32), arc_y.astype(numpy.float32), m)
+    pyfits.PrimaryHDU(data=wl_data.T).writeto(
+        "image_wavelengths.fits", clobber=True)    
+
+    pyfits.HDUList([pyfits.PrimaryHDU(),
+                    pyfits.ImageHDU(data=wl_data.T),
+                    pyfits.ImageHDU(data=fitsdata.T)]).writeto("image+wl.fits", clobber=True)
+
     for stripwidth in [5,25,75,150,300, 600]:
         # stripwidth = 75
         pick_strip = (arc_y > line-stripwidth) & (arc_y < line+stripwidth)
-
-        wl_data = polyval2d(arc_x.astype(numpy.float32), arc_y.astype(numpy.float32), m)
-        pyfits.PrimaryHDU(data=wl_data.T).writeto(
-            "image_wavelengths.fits", clobber=True)    
 
         # Now merge data and wavelengths and write to file
         logger.info("dumping wavelenghts and fluxes into file")
@@ -462,7 +466,7 @@ if __name__ == "__main__":
 
         print merged.shape
         logger.info("dumping to file")
-        numpy.savetxt("wl+flux.dump.%D", merged, stripwidth)
+        numpy.savetxt("wl+flux.dump.%d" % (stripwidth), merged)
 
     
     # trace_single_line(fitsdata, wls_data, max_s2n,
