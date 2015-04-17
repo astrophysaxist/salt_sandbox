@@ -194,7 +194,7 @@ def trace_arc(data,
 
 
 
-def trace_single_line(fitsdata, wls, line_idx, ds9_region_file=None):
+def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None):
 
     logger = logging.getLogger("TraceSlgLine")
 
@@ -308,28 +308,32 @@ def polyval2d(x, y, m):
 
 
 
+def compute_2d_wavelength_solution(arc_filename, 
+                                   n_lines_to_trace=15, 
+                                   fit_order=2,
+                                   output_wavelength_image=None,
+                                   debug=False):
 
+    logger = logging.getLogger("Comp2D-WLS")
 
+    logger.info("Tracing arcs in file %s" % (arc_filename))
 
-if __name__ == "__main__":
-
-    logger_setup = pysalt.mp_logging.setup_logging()
-    logger = logging.getLogger("MAIN")
-
-
-    filename = sys.argv[1]
-    logger.info("Tracing arcs in file %s" % (filename))
-    hdulist = pyfits.open(filename)
+    hdulist = pyfits.open(arc_filename)
     line = hdulist['SCI'].data.shape[0]/2
 
     logger.info("Attempting to find wavelength solution")
-    pickle_file = "traceline.pickle"
-    try:
-        wls_data = pickle.load(open(pickle_file, "rb"))
-        logger.info("Using pickled data - may need to delete --> %s <--" % (pickle_file))
-    except:
-        wls_data = wlcal.find_wavelength_solution(filename, line)
-        pickle.dump(wls_data, open(pickle_file, "wb"))
+
+    if (debug):
+        pickle_file = "traceline.pickle"
+        try:
+            wls_data = pickle.load(open(pickle_file, "rb"))
+            logger.info("Using pickled data - may need to delete --> %s <--" % (pickle_file))
+        except:
+            wls_data = wlcal.find_wavelength_solution(filename, line)
+            pickle.dump(wls_data, open(pickle_file, "wb"))
+    else:
+        wls_data = wlcal.find_wavelength_solution(arc_filename, line)
+    print wls_data
 
     logger.info("Continuing with tracing lines!\n")
     time.sleep(0.1)
@@ -347,7 +351,7 @@ if __name__ == "__main__":
     logger.info("Creating slit profile for normalization")
     slitprofile_fit, mask, slitprofile = find_slit_profile(hdulist, filename, source_region=None)
     print "SLITPROFILE:", slitprofile.shape, hdulist['SCI'].data.shape
-    numpy.savetxt("slitprofile.dump", slitprofile)
+    if (debug): numpy.savetxt("slitprofile.dump", slitprofile)
 
     #
     # For debugging, extract a data block around the position of the line
@@ -360,8 +364,8 @@ if __name__ == "__main__":
     #truncate to cut off rough edges
     fitsdata = fitsdata[:, 60:1985]
 
-    pyfits.PrimaryHDU(data=fitsdata.T).writeto("image_slitflattened.fits", clobber=True)
-    #fitsdata[fitsdata <= 0] = numpy.NaN
+    if (debug): 
+        pyfits.PrimaryHDU(data=fitsdata.T).writeto("image_slitflattened.fits", clobber=True)
 
     logger.info("Applying 5x0 pixel gauss filter")
     fitsdata_gf = scipy.ndimage.filters.gaussian_filter(fitsdata, (5,0), 
@@ -369,14 +373,11 @@ if __name__ == "__main__":
                                           )
     fitsdata_gf[fitsdata <= 0] = numpy.NaN
     fitsdata[fitsdata <= 0] = numpy.NaN
-    #fitsdata = fitsdata_gf
 
-    pyfits.PrimaryHDU(data=fitsdata.T).writeto("image_smooth.fits", clobber=True)
+    if (debug):
+        pyfits.PrimaryHDU(data=fitsdata.T).writeto("image_smooth.fits", clobber=True)
 
-    #print "done!"; sys.exit(0)
 
-    # trace_single_line(fitsdata, wls_data, 21,
-    #                   ds9_region_file="ds9_arc.reg")
 
     # Determine curvature with the 10 strongest lines
     # Also eliminate all lines with nearby companions that might cause problems
@@ -387,7 +388,7 @@ if __name__ == "__main__":
     pysalt.clobberfile("ds9_arc.reg")
 
     traces = None
-    for i in range(15):
+    for i in range(n_lines_to_trace):
         linetrace = trace_single_line(fitsdata_gf, wls_data, sort_sn[i],
                            ds9_region_file="ds9_arc.reg")
         print linetrace.shape
@@ -397,22 +398,25 @@ if __name__ == "__main__":
                  numpy.append(traces, linetrace, axis=0)
         #traces.append(linetrace)
 
-    print traces
     traces_2d = numpy.array(traces)
-    print traces_2d.shape
-    numpy.savetxt("traces_2d.dmp", traces_2d)
+
+    if (debug):
+        print traces
+        print traces_2d.shape
+        numpy.savetxt("traces_2d.dmp", traces_2d)
 
     #
     # Now we have a full array of X, Y, and wavelength positions.
+    # Go on and fit a full 2-D polynomial fit
     #
 
     m = polyfit2d(x=traces[:,1],
                   y=traces[:,0],
                   z=traces[:,4],
-                  order=2)
+                  order=fit_order)
 
     plot_solution = False
-    if (plot_solution):
+    if (plot_solution and debug):
         x=traces[:,1]
         y=traces[:,0]
         z=traces[:,4]
@@ -436,37 +440,62 @@ if __name__ == "__main__":
     print line
 
     wl_data = polyval2d(arc_x.astype(numpy.float32), arc_y.astype(numpy.float32), m)
-    pyfits.PrimaryHDU(data=wl_data.T).writeto(
-        "image_wavelengths.fits", clobber=True)    
 
-    pyfits.HDUList([pyfits.PrimaryHDU(),
-                    pyfits.ImageHDU(data=wl_data.T),
-                    pyfits.ImageHDU(data=fitsdata.T)]).writeto("image+wl.fits", clobber=True)
+    if (debug):
+        pyfits.PrimaryHDU(data=wl_data.T).writeto(
+            "image_wavelengths.fits", clobber=True)    
+        
+    if (not output_wavelength_image):
+        wli_hdulist = pyfits.HDUList([pyfits.PrimaryHDU(),
+                                  pyfits.ImageHDU(data=wl_data.T),
+                                  pyfits.ImageHDU(data=fitsdata.T)])
+        wli_hdulist.writeto(output_wavelength_image, clobber=True)
 
-    for stripwidth in [5,25,75,150,300, 600]:
-        # stripwidth = 75
-        pick_strip = (arc_y > line-stripwidth) & (arc_y < line+stripwidth)
+    if (debug):
+        for stripwidth in [5,25,75,150,300, 600]:
+            # stripwidth = 75
+            pick_strip = (arc_y > line-stripwidth) & (arc_y < line+stripwidth)
 
-        # Now merge data and wavelengths and write to file
-        logger.info("dumping wavelenghts and fluxes into file")
-        # merged = numpy.append(wl_data.reshape((-1,1)),
-        #                       fitsdata.T.reshape((-1,1)),
-        #                       #hdulist['SCI'].data.T.reshape((-1,1)),
-        #                       #fitsdata[pick_strip].reshape((-1,1)),
-        #                       axis=1)
-        merged = numpy.append(wl_data[pick_strip].reshape((-1,1)),
-        #                       hdulist['SCI'].data.T[pick_strip].reshape((-1,1)),
-                              fitsdata[pick_strip].reshape((-1,1)),
-                              axis=1)
-        si = numpy.argsort(merged[:,0])
-        merged = merged[si]
+            # Now merge data and wavelengths and write to file
+            logger.info("dumping wavelenghts and fluxes into file")
+            # merged = numpy.append(wl_data.reshape((-1,1)),
+            #                       fitsdata.T.reshape((-1,1)),
+            #                       #hdulist['SCI'].data.T.reshape((-1,1)),
+            #                       #fitsdata[pick_strip].reshape((-1,1)),
+            #                       axis=1)
+            merged = numpy.append(wl_data[pick_strip].reshape((-1,1)),
+            #                       hdulist['SCI'].data.T[pick_strip].reshape((-1,1)),
+                                  fitsdata[pick_strip].reshape((-1,1)),
+                                  axis=1)
+            si = numpy.argsort(merged[:,0])
+            merged = merged[si]
 
-        in_range = (merged[:,0] > 5930) & (merged[:,0] < 6000)
-        merged = merged[in_range]
+            in_range = (merged[:,0] > 5930) & (merged[:,0] < 6000)
+            merged = merged[in_range]
 
-        print merged.shape
-        logger.info("dumping to file")
-        numpy.savetxt("wl+flux.dump.%d" % (stripwidth), merged)
+            print merged.shape
+            logger.info("dumping to file")
+            numpy.savetxt("wl+flux.dump.%d" % (stripwidth), merged)
+
+    return wl_data.T
+
+
+if __name__ == "__main__":
+
+    logger_setup = pysalt.mp_logging.setup_logging()
+    logger = logging.getLogger("MAIN")
+
+
+    filename = sys.argv[1]
+
+
+    wls_2d = compute_2d_wavelength_solution(
+        arc_filename=filename, 
+        n_lines_to_trace=15, 
+        fit_order=2,
+        output_wavelength_image="wl+image.fits",
+        debug=True)
+
 
     
     # trace_single_line(fitsdata, wls_data, max_s2n,
