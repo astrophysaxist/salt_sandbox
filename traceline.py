@@ -46,14 +46,14 @@ def trace_arc(data,
     # Create a list of row numbers that we need to inspect
     if (direction > 0):
         # We are going upwards
-        logger.info("Moving upwards")
+        logger.debug("Moving upwards")
         row_numbers = numpy.arange(start_y+direction, data.shape[1], direction)
     elif (direction < 0):
         # downwards
-        logger.info("Moving downwards")
+        logger.debug("Moving downwards")
         row_numbers = numpy.arange(start_y+direction, direction, direction)
     elif (direction == 0):
-        print "bad boy, very bad boy!!!"
+        logger.error("going neither up nor down, bad boy, very bad boy!!!")
         return 
 
 
@@ -210,7 +210,7 @@ def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None):
         ds9_region = open(ds9_region_file, "a")
         print >>ds9_region, """\
 # Region file format: DS9 version 4.1
-global color=green dashlist=8 3 width=1 font="helvetica 10 normal roman" select=1 highlite=1 dash=0 fixed=0 edit=1 move=1 delete=1 include=1 source=1
+global color=black dashlist=8 3 width=1 font="helvetica 10 normal roman" select=1 highlite=1 dash=0 fixed=0 edit=1 move=1 delete=1 include=1 source=1
 image\
 """
 
@@ -252,7 +252,7 @@ image\
     #
 
     # compute the wavelength of this line
-    print 
+    # print 
     wl = numpy.polynomial.polynomial.polyval(wls_data['linelist_arc'][line_idx,1], wls_data['wl_fit_coeffs'])
     linetrace = numpy.append(all_row_data,
                              numpy.ones((all_row_data.shape[0],1))*wl, 
@@ -333,7 +333,7 @@ def compute_2d_wavelength_solution(arc_filename,
             pickle.dump(wls_data, open(pickle_file, "wb"))
     else:
         wls_data = wlcal.find_wavelength_solution(arc_filename, line)
-    print wls_data
+    #print wls_data
 
     logger.info("Continuing with tracing lines!\n")
     time.sleep(0.1)
@@ -349,7 +349,7 @@ def compute_2d_wavelength_solution(arc_filename,
     # brightness along their entire length
     #
     logger.info("Creating slit profile for normalization")
-    slitprofile_fit, mask, slitprofile = find_slit_profile(hdulist, filename, source_region=None)
+    slitprofile_fit, mask, slitprofile = find_slit_profile(hdulist, arc_filename, source_region=None)
     print "SLITPROFILE:", slitprofile.shape, hdulist['SCI'].data.shape
     if (debug): numpy.savetxt("slitprofile.dump", slitprofile)
 
@@ -362,13 +362,16 @@ def compute_2d_wavelength_solution(arc_filename,
     fitsdata = (hdulist['SCI'].data / slitprofile).T
     
     #truncate to cut off rough edges
-    fitsdata = fitsdata[:, 60:1985]
+    #fitsdata = fitsdata[:, 60:1985]
 
     if (debug): 
         pyfits.PrimaryHDU(data=fitsdata.T).writeto("image_slitflattened.fits", clobber=True)
 
-    logger.info("Applying 5x0 pixel gauss filter")
-    fitsdata_gf = scipy.ndimage.filters.gaussian_filter(fitsdata, (5,0), 
+    binx, biny = pysalt.get_binning(hdulist)
+
+    gauss_width = 8./binx
+    logger.info("Applying %.1f pixel gauss filter in spectral dir" % (gauss_width))
+    fitsdata_gf = scipy.ndimage.filters.gaussian_filter(fitsdata, (gauss_width,0), 
                                           mode='constant', cval=0,
                                           )
     fitsdata_gf[fitsdata <= 0] = numpy.NaN
@@ -382,7 +385,7 @@ def compute_2d_wavelength_solution(arc_filename,
     # Determine curvature with the 10 strongest lines
     # Also eliminate all lines with nearby companions that might cause problems
     sort_sn = numpy.argsort(wls_data['linelist_arc'][:,4])[::-1]
-    print wls_data['linelist_arc'][sort_sn][:10,4]
+    # print wls_data['linelist_arc'][sort_sn][:10,4]
 
     # Reset ds9_arc
     pysalt.clobberfile("ds9_arc.reg")
@@ -391,7 +394,7 @@ def compute_2d_wavelength_solution(arc_filename,
     for i in range(n_lines_to_trace):
         linetrace = trace_single_line(fitsdata_gf, wls_data, sort_sn[i],
                            ds9_region_file="ds9_arc.reg")
-        print linetrace.shape
+        # print linetrace.shape
         numpy.savetxt("LT.%d" % i, linetrace)
 
         traces = linetrace if traces == None else \
@@ -401,8 +404,8 @@ def compute_2d_wavelength_solution(arc_filename,
     traces_2d = numpy.array(traces)
 
     if (debug):
-        print traces
-        print traces_2d.shape
+        #print traces
+        #print traces_2d.shape
         numpy.savetxt("traces_2d.dmp", traces_2d)
 
     #
@@ -437,7 +440,7 @@ def compute_2d_wavelength_solution(arc_filename,
     arc_x, arc_y = numpy.indices(fitsdata.shape)
 
     line = wls_data['line']
-    print line
+    #print line
 
     wl_data = polyval2d(arc_x.astype(numpy.float32), arc_y.astype(numpy.float32), m)
 
@@ -488,10 +491,15 @@ if __name__ == "__main__":
 
     filename = sys.argv[1]
 
+    n_lines = 15
+    try:
+        n_lines = int(sys.argv[2])
+    except:
+        pass
 
     wls_2d = compute_2d_wavelength_solution(
         arc_filename=filename, 
-        n_lines_to_trace=15, 
+        n_lines_to_trace=n_lines, 
         fit_order=2,
         output_wavelength_image="wl+image.fits",
         debug=True)
