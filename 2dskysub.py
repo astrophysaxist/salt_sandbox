@@ -90,6 +90,8 @@ if __name__ == "__main__":
     wl_sort = numpy.argsort(all_skies[:,0])
     all_skies = all_skies[wl_sort]
 
+    numpy.savetxt("allskies", all_skies[::10])
+
     ############################################################################
     #
     # Now we have a full list of wavelengths and presumed sky fluxes
@@ -142,6 +144,8 @@ if __name__ == "__main__":
         ss = numpy.append(basepoints.reshape((-1,1)),
                           sky_spectrum_spline(basepoints).reshape((-1,1)),
                           axis=1)
+        numpy.savetxt("skyspectrum.knots", sky_spectrum_spline.get_knots())
+        numpy.savetxt("skyspectrum.coeffs", sky_spectrum_spline.get_coeffs())
         numpy.savetxt("skyspectrum.txt", ss)
     except:
         logger.critical("Error with spline-fitting the sky-spectrum")
