@@ -24,8 +24,32 @@ import scipy.spatial
 import pysalt.mp_logging
 import logging
 
+
+#
+# Line info columns:
+#
+#  0: position in pixels
+#  1: peak line flux
+#  2: continuum flux
+#  3: continuum noise
+#  4: signal-to-noise ( = (peak - continuum)/continuum_noise )
+#  5: position in angstroems
+#
+lineinfo_cols = ["PIXELPOS",
+                 "FLUX",
+                 "CONTINUUM",
+                 "CONTINUUM_NOISE",
+                 "S2N",
+                 "WAVELENGTH"]
+lineinfo_colidx = {}
+for idx,name in enumerate(lineinfo_cols):
+    lineinfo_colidx[name] = idx
+
+
+
+
 def match_line_catalogs(arc, ref, matching_radius, verbose=False,
-                        col_ref=0, col_arc=-1):
+                        col_ref=0, col_arc=-1, dumpfile=None):
 
     logger = logging.getLogger("MatchLineCat")
 
@@ -49,27 +73,53 @@ def match_line_catalogs(arc, ref, matching_radius, verbose=False,
                                        p=1, # use linear distance
                                        distance_upper_bound=matching_radius)
 
+    # i is the index with the closest match
     i = numpy.array(i)
-    i[i>=ref.shape[0]] = 0
+    bad_matches = (i>=ref.shape[0])
+    i[bad_matches] = 0
     #print nearest_neighbor
     #print i
 
     #print "arc/ref",arc.shape, ref.shape
     #print "nn/i",nearest_neighbor.shape, i.shape
+
     #
-    # Now match both catalogs
+    # Now merge both catalogs, appending the reference catalog 
+    # to the ARC source catalog
     # 
     matched = numpy.zeros((arc.shape[0], (arc.shape[1]+ref.shape[1])))
     matched[:,:arc.shape[1]] = arc
     matched[:,arc.shape[1]:] = ref[i]
-    
+    print "XXXXXXXXXXXX\n"*3,ref.shape, ref[i].shape, i.shape, bad_matches.shape
+    print bad_matches
+    numpy.savetxt("matched_raw", matched)
+    numpy.savetxt("matched_bad", bad_matches)
+    #sys.exit(0)
+
+    print "XXXX\n"*3
+    matched = matched[~bad_matches]
+
     #
     # Now eliminate all "matches" without a sufficiently close match
     # (i.e. where nearest_neighbordistance == inf)
     #
+
+    df = None
+    if (not dumpfile == None):
+        df = open(dumpfile, "w")
+#        with open(dumpfile, "w") as df:
+        numpy.savetxt(df, matched, "%8.3f")
+        
     #print "before:",matched.shape
-    good_match = numpy.isfinite(nearest_neighbor)
-    matched = matched[good_match]
+    #good_match = numpy.isfinite(nearest_neighbor)
+    #matched = matched[good_match]
+
+    if (not df == None):
+        print >>df, "\n\n\n\n\n"
+        numpy.savetxt(df, matched, "%8.3f")
+        print >>df, "\n\n\n\n\n"
+        numpy.savetxt(df, nearest_neighbor)
+        df.close()
     #print "after:",matched.shape
 
     logger.debug("Found %3d matched lines" % (matched.shape[0]))
@@ -80,7 +130,7 @@ def match_line_catalogs(arc, ref, matching_radius, verbose=False,
     
 
 
-def extract_arc_spectrum(hdulist, line=None, avg_width=10):
+def extract_arc_spectrum(hdulist, line=None, avg_width=20):
 
     logger = logging.getLogger("ExtractSpec")
 
@@ -90,6 +140,9 @@ def extract_arc_spectrum(hdulist, line=None, avg_width=10):
     center = hdulist['SCI'].data.shape[0] / 2 if line == None else line
 
     # average over a couple of lines
+    binx, biny = pysalt.get_binning(hdulist)
+    binned_width = avg_width / biny
+
     spec = hdulist['SCI'].data[center-avg_width:center+avg_width,:]
     #print spec.shape
 
@@ -141,7 +194,8 @@ def find_list_of_lines(spec, avg_width):
          for i in range(blkavg.shape[0])])
     numpy.savetxt("peaks_yesno", peak)
     numpy.savetxt("wl_peaks", numpy.append(
-        x_pixels[peak].reshape((-1,1)), spec[peak].reshape((-1,1)), axis=1))
+#        x_pixels[peak].reshape((-1,1)), spec[peak].reshape((-1,1)), axis=1))
+        x_pixels[peak].reshape((-1,1)), blkavg[peak].reshape((-1,1)), axis=1))
     
     # Now reject all peaks that are not significantly over the estimated background noise
     readnoise = 2. # raw data: ron = 3.3, gain = 1.6 --> RON=2 ADU
@@ -151,7 +205,7 @@ def find_list_of_lines(spec, avg_width):
     # require at least 3 sigma over background noise
     real_peak = peak & ((spec-continuum) > 3*continuum_noise) #& (spec > continuum+100)
     numpy.savetxt("wl_real_peaks", numpy.append(
-        x_pixels[real_peak].reshape((-1,1)), spec[real_peak].reshape((-1,1)), axis=1))
+        x_pixels[real_peak].reshape((-1,1)), blkavg[real_peak].reshape((-1,1)), axis=1))
 
     # compute full S/N for each pixels
     s2n = (spec - continuum) / (numpy.sqrt(spec*readnoise*2*avg_width) / (2*avg_width))
@@ -160,12 +214,13 @@ def find_list_of_lines(spec, avg_width):
 
 
     # Combine all relevant data generated above for later use
-    combined = numpy.empty((numpy.sum(real_peak), 5))
+    combined = numpy.empty((numpy.sum(real_peak), len(lineinfo_cols)))
     combined[:,0] = x_pixels[real_peak]
-    combined[:,1] = spec[real_peak]
+    combined[:,1] = blkavg[real_peak]
     combined[:,2] = continuum[real_peak]
     combined[:,3] = continuum_noise[real_peak]
     combined[:,4] = s2n[real_peak]
+    combined[:,5] = x_pixels[real_peak]
 
     return combined
 
@@ -211,13 +266,20 @@ def find_matching_lines(ref_lines, lineinfo,
                         rss,
                         dispersion, central_wavelength, reference_pixel_x,
                         matching_radius,
-                        s2n_cutoff=30):
+                        s2n_cutoff=30,
+                        use_precomputed_wavelength=False):
     
     #print
 
     logger = logging.getLogger("FindMatchingLines")
     logger.debug("Using d=%.6f A/px, central wavelength: %10.4f @ %8.2f px" % (
         dispersion, central_wavelength, reference_pixel_x))
+
+    #
+    # Make a copy of lineinfo to make sure we don't overwrite good information
+    #
+    my_lineinfo = numpy.array(lineinfo)
+    #print "lineinfo.shape=",lineinfo.shape
 
     blue_edge = rss.calc_bluewavelength() * mm_to_A
     red_edge = rss.calc_redwavelength() * mm_to_A
@@ -228,24 +290,52 @@ def find_matching_lines(ref_lines, lineinfo,
     # Find average offset between arc lines and reference lines
     # 
     
-    # compute wavelength based on central wavelength and 
-    wl = (lineinfo[:,0]-reference_pixel_x) * dispersion + central_wavelength
-
     # only select strong lines in the ARC spectrum
-    wl = wl[lineinfo[:,4] > s2n_cutoff]
+    good_s2n = my_lineinfo[:,lineinfo_colidx['S2N']] > s2n_cutoff
+    #selected_lines = numpy.array(lineinfo[good_s2n])
+    #print selected_lines.shape
+
+    if (not use_precomputed_wavelength):
+        # compute wavelength based on central wavelength and
+        my_lineinfo[:,lineinfo_colidx['WAVELENGTH']] = \
+            (my_lineinfo[:,lineinfo_colidx['PIXELPOS']]-reference_pixel_x) * dispersion + central_wavelength
+        #wl = (selected_lines[:,lineinfo_colidx['PIXELPOS']]-reference_pixel_x) * dispersion + central_wavelength
+        # we already have wavelength from some other source
+        #wl = selected_lines[:,lineinfo_colidx['WAVELENGTH']]
+    #else:
+
+
+    #
+    # extract only wavelengths for strong lines in the ARC spectrum
+    #
+    # or pick only the N strongest lines for now
+    #N = 15
+    #s2n_sort = numpy.argsort(my_lineinfo[:,lineinfo_colidx['S2N']])[::-1][:N]
+    #my_lineinfo = my_lineinfo[s2n_sort] #good_s2n]
+    #my_lineinfo = my_lineinfo[good_s2n]
+    #print my_lineinfo[:,lineinfo_colidx['S2N']]
+    wl = my_lineinfo[:,lineinfo_colidx['WAVELENGTH']]
+#[good_s2n]
 
     #print ref_lines[:,0].reshape((-1,1)).T.shape
     #print wl.reshape((-1,1)).shape
     #numpy.savetxt("arc_lines", wl)
     #numpy.savetxt("ref_lines", ref_lines[:,0])
 
-
+    #
+    # Compute wavelength differences between each line in the ARC spectrum to 
+    # every line in the lamp line catalog. Good wavelength shifts, i.e. such that 
+    # make spectra overlap, will appear more frequently as the right shift is 
+    # the same for a bunch of lines, whereas wrong matches differ from one line
+    # to the next.
+    #
     differences = ref_lines[:,0].reshape((-1,1)).T - wl.reshape((-1,1))
-    #print differences.shape
     numpy.savetxt("diffs", differences.flatten())
 
+    #
     # Now find the most frequently found offset
     # # Use kernel densities to avoid ambiguities between two adjacent bins
+    #
 
     # allow for as much as 20% shift in wavelength coverage
     # hopefully things are not THAT bad, but if: too bad for you
@@ -271,15 +361,23 @@ def find_matching_lines(ref_lines, lineinfo,
     # with the catalog of reference lines
     logger.debug("DISPERSION %.4f --> NEED SHIFT of ~ %.2f A" % (dispersion, avg_shift))
 
+    #
     # Now improve the wavelength calibration of all found ARC lines by 
     # applying the shift we just found
-    lineinfo[:,-1] += avg_shift
+    #
+    my_lineinfo[:,lineinfo_colidx['WAVELENGTH']] += avg_shift
+    numpy.savetxt("lineinfo__dispersion=%.3f" % (dispersion), my_lineinfo)
+
+    #lineinfo[:,-1] += avg_shift
 
     #
     # Now match the two catalogs so we can derive an even better wavelength 
-    # calibration
+    # calibration. 
+    # This also allows us to count how many lines we are able to match.
     #
-    matched = match_line_catalogs(lineinfo, ref_lines, matching_radius)
+    matched = match_line_catalogs(my_lineinfo, ref_lines, matching_radius,
+                                  col_arc=lineinfo_colidx['WAVELENGTH'],
+                                  col_ref=0)
     numpy.savetxt("matched.lines.%.4f" % (dispersion), matched)
 
     logger.info("Trying dispersion %8.4f A/px   ===>   shift: %8.2fA, #matches: %3d" % (
@@ -353,8 +451,8 @@ def find_wavelength_solution(filename, line):
     #print dispersion
     #print lineinfo[:,0]
     wl = lineinfo[:,0] * dispersion + blue_edge
-    lineinfo = numpy.append(lineinfo, wl.reshape((-1,1)), axis=1)
-    numpy.savetxt("linecal", lineinfo)
+    #lineinfo = numpy.append(lineinfo, wl.reshape((-1,1)), axis=1)
+    #numpy.savetxt("linecal", lineinfo)
 
     #
     # Load linelist
@@ -363,7 +461,7 @@ def find_wavelength_solution(filename, line):
     lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.txt" % lamp)
     _, fn_only = os.path.split(lampfile)
     logger.info("Reading calibration line wavelengths from data->%s" % (fn_only))
-    logger.debug("Full path to lamp line list: %s" % (lampfile))
+    logger.info("Full path to lamp line list: %s" % (lampfile))
     #lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.wav" % lamp)
     #lampfile=pysalt.get_data_filename("pysalt$data/linelists/Ar.salt")
     #lampfile="Ar.lines"
@@ -371,33 +469,57 @@ def find_wavelength_solution(filename, line):
     #print lines.shape
     #print lines
 
+    #
     # Now select only lines that are in the estimated range of our ARC spectrum
+    #
     in_range = (lines[:,0] > numpy.min(wl)) & (lines[:,0] < numpy.max(wl))
     ref_lines = lines[in_range]
     logger.debug("Found these lines for fitting:\n%s" % (
             "\n".join(["%10.4f" % l for l in ref_lines[:,0]])))
     #print ref_lines
 
+    ############################################################################
+    #
+    # Next step for wavelength calibration:
     #
     # Match lines between ARC spectrum and reference line list, 
     # allowing for a small uncertainty in dispersion
     #
+    ############################################################################
 
     reference_pixel_x = 0.5 * spec.shape[0]
 
     # dispersion was calculated above
     # central wavelength 
     central_wavelength = 0.5 * (blue_edge + red_edge)
-    max_dispersion_error = 0.10 # +/- 10% should be plenty
+    max_dispersion_error = 0.00 #10 # +/- 10% should be plenty
     dispersion_search_steps = 0.01 # vary dispersion in 1% steps
     n_dispersion_steps = (max_dispersion_error / dispersion_search_steps) * 2 + 1
 
+    #
     # compute what dispersion factors we are trying 
+    #
     trial_dispersions = numpy.linspace(1.0-max_dispersion_error, 
                                       1.0+max_dispersion_error,
                                       n_dispersion_steps) * dispersion 
     n_matches = numpy.zeros((trial_dispersions.shape[0]))
     matched_cats = [None] * trial_dispersions.shape[0]
+
+    #
+    # Now try each dispersion, one by one, and compute what wavelength offset 
+    # we would need to make the maximum number of lines match known lines from 
+    # the line catalog.
+    # 
+
+    #
+    # New: Assume we know line centers to within a pixel, then we can match 
+    # lines that lie within a 1-pixel radius
+    #
+    # Remember: units here are angstroem !!!
+    matching_radius = 4 * dispersion
+    logger.info("Considering lines within %.1f A of a known ARC line as matched!" % (
+            matching_radius))
+    print "before loop:", lineinfo.shape
 
     for idx, _dispersion in enumerate(trial_dispersions):
 
@@ -406,7 +528,7 @@ def find_wavelength_solution(filename, line):
 
         # copy the original line info so we don't accidently overwrite important data
         _lineinfo = numpy.array(lineinfo)
-
+        
         # find optimal line shifts and match lines 
         # consider lines within 5A of each other matches
         # --> this most likely will depend on spectral resolution and binning
@@ -414,7 +536,7 @@ def find_wavelength_solution(filename, line):
                                           rss,
                                           _dispersion, central_wavelength,
                                           reference_pixel_x,
-                                          matching_radius = 5, 
+                                          matching_radius = matching_radius, 
         )
 
         # Save results for later picking of the best one
@@ -423,7 +545,9 @@ def find_wavelength_solution(filename, line):
 
         numpy.savetxt("dispersion_scale_%.3f" % (_dispersion), matched_cat)
 
+    #
     # Find the solution with the most matched lines
+    #
     n_max = numpy.argmax(n_matches)
     
     #print
@@ -446,23 +570,101 @@ def find_wavelength_solution(filename, line):
     logger.info("Computing an analytical wavelength calibration...")
     wls = compute_wavelength_solution(matched, max_order=3)
 
+    spec_x = numpy.polynomial.polynomial.polyval(
+        numpy.arange(spec.shape[0]), wls).reshape((-1,1))
+    spec_combined = numpy.append(spec_x, spec.reshape((-1,1)), axis=1)
+    numpy.savetxt("spec.calib.start", spec_combined)
+
+    #
     # Now we have a best-match solution
     # Match lines again to see what the RMS is - use a small matching radius now
-    
-    _linelist = numpy.array(lineinfo)
-    numpy.savetxt("lineinfo.final", _linelist)
-    _linelist[:,1] = _linelist[:,0]
-    _linelist[:,0] = numpy.polynomial.polynomial.polyval(_linelist[:,0], wls)
+    #
 
-    # compute wl with polyval
-    _wl = lineinfo[:,0]
-    numpy.savetxt("final.1", _wl)
+    ############################################################################
+    #
+    # Since the original matching was done using a simple polynomial form, 
+    # let's now iterate the rough solution using higher order polynomials to 
+    # (hopefully) match a larger number of lines
+    #
+    # Add here: 
+    # - Keep an eye on r.m.s. of the fit, and the number of matched lines
+    # - with every step, reduce the matching radius to make sure we are matching
+    #   only with the most likely counterpart in case of close line (blends)
+    #
+    ############################################################################
+    #prev_wls = wls
+    #matching_radius = 2*dispersion
+    logger.info("Refining WLS using all %d lines" % (lineinfo.shape[0]))
+    for iteration in range(3):
 
-    numpy.savetxt("final.2", numpy.polynomial.polynomial.polyval(_wl, wls))
-    numpy.savetxt("final.3", _wl*wls[1]+wls[0])
+        sys.stdout.write("\n\n\n"); sys.stdout.flush()
 
-    final_match = match_line_catalogs(_linelist, ref_lines, matching_radius=5, verbose=True,
-                                      col_arc=0, col_ref=0)
+        _linelist = numpy.array(lineinfo)
+
+        # Now compute the new wavelength for each line
+        _linelist[:,lineinfo_colidx['WAVELENGTH']] = numpy.polynomial.polynomial.polyval(
+            _linelist[:,lineinfo_colidx['PIXELPOS']], wls)
+
+        numpy.savetxt("lineinfo.iteration=%d" % (iteration+1), _linelist, "%10.4f")
+
+        # compute wl with polyval
+        # _wl = lineinfo[:,0]
+        # numpy.savetxt("final.1", _wl)
+
+        # numpy.savetxt("final.2", numpy.polynomial.polynomial.polyval(_wl, wls))
+        # numpy.savetxt("final.3", _wl*wls[1]+wls[0])
+
+        # With the refined wavelength solution, match lines between the 
+        # ARC spectrum and the reference line catalog
+        new_matches = match_line_catalogs(_linelist, ref_lines, 
+                                          matching_radius=50, #matching_radius, 
+                                          verbose=False,
+                                          col_arc=lineinfo_colidx['WAVELENGTH'], 
+                                          col_ref=0,
+                                          dumpfile="finalmatch.%d" % (iteration+1))
+
+        logger.info("WLS Refinement step %3d: now %3d matches!" % (
+                iteration+1, new_matches.shape[0]))
+
+        # -- for debugging --
+        numpy.savetxt("matched.cat.iter%d" % (iteration+1), new_matches)
+
+        #
+        # Before fitting, iteratively reject obvious outliers most likely caused
+        # by matching wrong lines
+        #
+        likely_outlier = numpy.isnan(new_matches[:,lineinfo_colidx['WAVELENGTH']])
+        for reject in range(3):
+            diff_angstroem = new_matches[:,lineinfo_colidx['WAVELENGTH']] - \
+                new_matches[:,len(lineinfo_colidx)]
+            med = numpy.median(diff_angstroem[~likely_outlier])
+            stdx = numpy.std(diff_angstroem[~likely_outlier])
+            sigma = scipy.stats.scoreatpercentile(diff_angstroem[~likely_outlier], [16,84])
+            std = 0.5*(sigma[1]-sigma[0])
+            likely_outlier = (diff_angstroem > med+2*std) | (diff_angstroem < med-2*std)
+            print med, std, stdx
+
+        # Now we have a better idea on outliers, so reject them and work with 
+        # what's left
+        new_matches = new_matches[~likely_outlier]
+        logger.info("WLS Refinement step %3d: %3d matches left after outliers!" % (
+                iteration+1, new_matches.shape[0]))
+
+        # And with the matched line list, compute a new wavelength solution
+        wls = compute_wavelength_solution(new_matches, max_order=3+iteration)
+
+        # -- for debugging --
+        numpy.savetxt("matched.outlierreject.iter%d" % (iteration+1), new_matches)
+        #
+        spec_x = numpy.polynomial.polynomial.polyval(
+            numpy.arange(spec.shape[0])+1., wls).reshape((-1,1))
+        spec_combined = numpy.append(spec_x, spec.reshape((-1,1)), axis=1)
+        numpy.savetxt("spec.calib.iteration_%d" % (iteration+1), spec_combined)
+
+        #prev_wls = wls
+
+    return
+
     numpy.savetxt("matched.cat.final", final_match)
 
     # Apply WLS to FITS header
