@@ -73,6 +73,7 @@ def trace_arc(data,
     arc_center[start_y,0] = start_x
 
     n_pixels_for_corner = 3
+    
     for lines_since_start, next_row_idx in enumerate(row_numbers):
         #logger.debug("Moving from row %4d to %4d" % (current_row_idx, next_row_idx))
 
@@ -201,8 +202,9 @@ def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None):
     arclines = wls_data['linelist_arc']
     primeline = arclines[line_idx,:]
     print primeline
-    arcpos_x = primeline[1]
-
+    arcpos_x = primeline[wlcal.lineinfo_colidx['PIXELPOS']]
+    logger.debug("Beginning line-trace at position X=%d, Y=%d" % (arcpos_x, wls_data['line']))
+            
     #data_around_line = fitsdata[arcpos_x-100:arcpos_x+100,:]
     #pyfits.PrimaryHDU(data=data_around_line.T).writeto("arcregion.fits", clobber=True)
 
@@ -253,7 +255,9 @@ image\
 
     # compute the wavelength of this line
     # print 
-    wl = numpy.polynomial.polynomial.polyval(wls_data['linelist_arc'][line_idx,1], wls_data['wl_fit_coeffs'])
+    wl = numpy.polynomial.polynomial.polyval(
+        wls_data['linelist_arc'][line_idx,wlcal.lineinfo_colidx['PIXELPOS']], 
+        wls_data['wl_fit_coeffs'])
     linetrace = numpy.append(all_row_data,
                              numpy.ones((all_row_data.shape[0],1))*wl, 
                              axis=1)
@@ -323,7 +327,7 @@ def compute_2d_wavelength_solution(arc_filename,
 
     logger.info("Attempting to find wavelength solution")
 
-    if (debug):
+    if (debug and False):
         pickle_file = "traceline.pickle"
         try:
             wls_data = pickle.load(open(pickle_file, "rb"))
@@ -340,8 +344,9 @@ def compute_2d_wavelength_solution(arc_filename,
 
     # Now pick the strongest line from the results
     arclines = wls_data['linelist_arc']
-    max_s2n = numpy.argmax(arclines[:,4])
-
+    max_s2n = numpy.argmax(arclines[:,wlcal.lineinfo_colidx['S2N']])
+    logger.info("Strongest line detected has S/N = %8.2f" % (
+            arclines[max_s2n,wlcal.lineinfo_colidx['S2N']]))
 
     #
     # Using routines from the spectral reduction module, flatten ARC spectrum 
@@ -381,16 +386,21 @@ def compute_2d_wavelength_solution(arc_filename,
         pyfits.PrimaryHDU(data=fitsdata.T).writeto("image_smooth.fits", clobber=True)
 
 
-
+    #
     # Determine curvature with the 10 strongest lines
+    # (Note: argsort sorts low to high, so need to reverse order to get high to low)
+    #
     # Also eliminate all lines with nearby companions that might cause problems
-    sort_sn = numpy.argsort(wls_data['linelist_arc'][:,4])[::-1]
+    #
+    sort_sn = numpy.argsort(wls_data['linelist_arc'][:,wlcal.lineinfo_colidx['S2N']])[::-1]
     # print wls_data['linelist_arc'][sort_sn][:10,4]
 
     # Reset ds9_arc
     pysalt.clobberfile("ds9_arc.reg")
 
     traces = None
+    logger.info("Preparing to trace %d lines" % (n_lines_to_trace))
+
     for i in range(n_lines_to_trace):
         linetrace = trace_single_line(fitsdata_gf, wls_data, sort_sn[i],
                            ds9_region_file="ds9_arc.reg")
@@ -454,7 +464,7 @@ def compute_2d_wavelength_solution(arc_filename,
                                   pyfits.ImageHDU(data=fitsdata.T)])
         wli_hdulist.writeto(output_wavelength_image, clobber=True)
 
-    if (debug):
+    if (debug and False):
         for stripwidth in [5,25,75,150,300, 600]:
             # stripwidth = 75
             pick_strip = (arc_y > line-stripwidth) & (arc_y < line+stripwidth)
@@ -477,8 +487,8 @@ def compute_2d_wavelength_solution(arc_filename,
             merged = merged[in_range]
 
             print merged.shape
-            logger.info("dumping to file")
-            numpy.savetxt("wl+flux.dump.%d" % (stripwidth), merged)
+            # logger.info("dumping to file")
+            # numpy.savetxt("wl+flux.dump.%d" % (stripwidth), merged)
 
     return wl_data.T
 
