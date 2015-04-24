@@ -24,7 +24,7 @@ if __name__ == "__main__":
     logger.info("Computing 2-D wavelength map")
     wls_2d = traceline.compute_2d_wavelength_solution(
         arc_filename=arcfile, 
-        n_lines_to_trace=15, 
+        n_lines_to_trace=10, 
         fit_order=2,
         output_wavelength_image="wl+image.fits",
         debug=False)
@@ -53,6 +53,10 @@ if __name__ == "__main__":
 
     # Remember: Both FITS data __AND__ WLS_2D data are in [y,x] ordering
     all_skies = None
+
+    obj_masked = numpy.empty(obj_data.shape)
+    obj_masked[:,:] = numpy.NaN
+
     for idx, sky_region in enumerate(sky_regions):
         print sky_region
 
@@ -60,6 +64,8 @@ if __name__ == "__main__":
         data_region = obj_data[sky_region[0]:sky_region[1], :]
         wls_region = wls_2d[sky_region[0]:sky_region[1], :]
         
+        obj_masked[sky_region[0]:sky_region[1], :] = obj_data[sky_region[0]:sky_region[1], :]
+
         # Now merge data and wavelengths
         # this gives us a 2-D array, shape N,2 with WL in the zero-th column, 
         # and fluxes in the first
@@ -74,6 +80,9 @@ if __name__ == "__main__":
 
         all_skies = data_wls if all_skies == None else \
             numpy.append(all_skies, data_wls, axis=0)
+
+    pyfits.HDUList([pyfits.PrimaryHDU(header=obj_hdulist['SCI'].header,
+                                      data=obj_masked)]).writeto("obj_masked.fits", clobber=True)
 
     #
     # Exclude all points with NaNs in either wavelength or flux
