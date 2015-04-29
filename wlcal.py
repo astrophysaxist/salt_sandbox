@@ -663,7 +663,9 @@ def find_wavelength_solution(filename, line):
 
         #prev_wls = wls
 
-    return
+    #return
+    final_match = matched
+
 
     numpy.savetxt("matched.cat.final", final_match)
 
@@ -696,6 +698,13 @@ def find_wavelength_solution(filename, line):
     spec_combined = numpy.append(spec_x, spec.reshape((-1,1)), axis=1)
     numpy.savetxt("spec.calib", spec_combined)
     
+
+    # print lines
+    # print _linelist
+    # print spec.shape
+    # print spec_combined.shape
+    # print line
+    # print wls
 
     return {
         'spec': spec,
