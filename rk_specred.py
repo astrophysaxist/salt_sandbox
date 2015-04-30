@@ -67,6 +67,11 @@ import pysalt.mp_logging
 import logging
 import numpy
 
+#
+# Ralf Kotulla modules
+#
+import wlcal
+
 def salt_prepdata(infile, badpixelimage=None, create_variance=False, 
                   masterbias=None, clean_cosmics=True,
                   flatfield_frame=None, mosaic=False,
@@ -87,7 +92,7 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
     #
     # Do some prepping
     #
-    hdulist.info()
+    #hdulist.info()
 
     logger.debug("Prepare'ing")
     hdulist = pysalt.saltred.saltprepare.prepare(
@@ -96,15 +101,12 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
         badpixelstruct=badpixel_hdu)
     # Add some history headers here
 
-
-    hdulist.info()
-
     #
     # Overscan/bias
     #
     logger.debug("Subtracting bias & overscan")
-    for ext in hdulist:
-        if (not ext.data == None): print ext.data.shape
+    # for ext in hdulist:
+    #     if (not ext.data == None): print ext.data.shape
     bias_hdu = None
     if (not masterbias == None and os.path.isfile(masterbias)):
         bias_hdu = pyfits.open(masterbias)
@@ -117,9 +119,9 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
         log=pysalt_log, verbose=verbose)
     logger.debug("done with bias & overscan")
 
-    print "--------------"
-    for ext in hdulist:
-        if (not ext.data == None): print ext.data.shape
+    # print "--------------"
+    # for ext in hdulist:
+    #     if (not ext.data == None): print ext.data.shape
 
     # Again, add some headers here
 
@@ -495,52 +497,90 @@ def specred(rawdir, prodir,
         pass
 
 
-
+    #############################################################################
     #
     # Determine a wavelength solution from ARC frames, where available
     #
+    #############################################################################
+
     logger.info("Searching for a wavelength calibration from the ARC files")
-    skip_wavelength_cal_search = os.path.isfile(dbfile)
+    skip_wavelength_cal_search = False #os.path.isfile(dbfile)
+    
+    # Keep track of when the ARCs were taken, so we can pick the one closest 
+    # in time to the science observation for data reduction
+    arc_obstimes = numpy.ones((len(obslog['ARC']))) * -999.9
+    arc_mosaic_list = [None] * len(obslog)
+    arc_mef_list = [None] * len(obslog)
     if (not skip_wavelength_cal_search):
         for idx, filename in enumerate(obslog['ARC']):
             _, fb = os.path.split(filename)
-            hdulist = open(filename)
+            hdulist = pyfits.open(filename)
+
+            # Use Julian Date for simple time indexing
+            arc_obstimes[idx] = hdulist[0].header['JD']
 
             arc_filename = "ARC_%s" % (fb)
+            arc_mosaic_filename = "ARC_m_%s" % (fb)
             rect_filename = "ARC-RECT_%s" % (fb)
-            logger.info("Creating mosaic for frame %s --> %s" % (fb, arc_filename))
 
+            logger.info("Creating MEF  for frame %s --> %s" % (fb, arc_filename))
             hdu = salt_prepdata(filename, 
                                 badpixelimage=None, 
-                                create_variance=False,
+                                create_variance=True,
                                 clean_cosmics=False,
-                                mosaic=True,
-                                #mosaic=False,
+                                mosaic=False,
                                 verbose=False)
-
             pysalt.clobberfile(arc_filename)
             hdu.writeto(arc_filename, clobber=True)
+            arc_mef_list[idx] = arc_filename
 
-            lamp=hdu[0].header['LAMPID'].strip().replace(' ', '')
-            lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.txt" % lamp)
-            automethod='Matchlines'
-            skysection=[800,1000]
-            logger.info("Searching for wavelength solution (lamp:%s, arc-image:%s)" % (
-                lamp, arc_filename))
-            specidentify(arc_filename, lampfile, dbfile, guesstype='rss', 
-                         guessfile='', automethod=automethod,  function='legendre',  order=5, 
-                         rstep=100, rstart='middlerow', mdiff=10, thresh=3, niter=5, 
-                         inter=False, clobber=True, logfile=logfile, verbose=True)
-            logger.debug("Done with specidentify")
+            logger.info("Creating mosaic for frame %s --> %s" % (fb, arc_mosaic_filename))
+            hdu_mosaiced = salt_prepdata(filename, 
+                                badpixelimage=None, 
+                                create_variance=True,
+                                clean_cosmics=False,
+                                mosaic=True,
+                                verbose=False)
+            pysalt.clobberfile(arc_mosaic_filename)
+            hdu_mosaiced.writeto(arc_mosaic_filename, clobber=True)
+            arc_mosaic_list[idx] = arc_mosaic_filename
 
-            logger.debug("Starting specrectify")
-            specrectify(arc_filename, outimages=rect_filename, outpref='',
-                        solfile=dbfile, caltype='line', 
-                        function='legendre',  order=3, inttype='interp', 
-                        w1=None, w2=None, dw=None, nw=None,
-                        blank=0.0, clobber=True, logfile=logfile, verbose=True)
+            #
+            # Now we have a HDUList of the mosaiced ARC file, so 
+            # we can continue to the wavelength calibration
+            #
+            wls_data = wlcal.find_wavelength_solution(hdu_mosaiced, None)
 
-            logger.debug("Done with specrectify")
+            #
+            # Now add some plotting here just to make sure the user is happy :-)
+            #
+            plotfile = arc_mosaic_filename[:-5]+".png"
+            wlcal.create_wl_calibration_plot(wls_data, hdu_mosaiced, plotfile)
+
+
+            
+
+
+            # lamp=hdu[0].header['LAMPID'].strip().replace(' ', '')
+            # lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.txt" % lamp)
+            # automethod='Matchlines'
+            # skysection=[800,1000]
+            # logger.info("Searching for wavelength solution (lamp:%s, arc-image:%s)" % (
+            #     lamp, arc_filename))
+            # specidentify(arc_filename, lampfile, dbfile, guesstype='rss', 
+            #              guessfile='', automethod=automethod,  function='legendre',  order=5, 
+            #              rstep=100, rstart='middlerow', mdiff=10, thresh=3, niter=5, 
+            #              inter=False, clobber=True, logfile=logfile, verbose=True)
+            # logger.debug("Done with specidentify")
+
+            # logger.debug("Starting specrectify")
+            # specrectify(arc_filename, outimages=rect_filename, outpref='',
+            #             solfile=dbfile, caltype='line', 
+            #             function='legendre',  order=3, inttype='interp', 
+            #             w1=None, w2=None, dw=None, nw=None,
+            #             blank=0.0, clobber=True, logfile=logfile, verbose=True)
+
+            # logger.debug("Done with specrectify")
 
 
     #
@@ -560,66 +600,81 @@ def specred(rawdir, prodir,
         logger.info("Creating mosaic for frame %s --> %s" % (fb, mosaic_filename))
         hdu = salt_prepdata(filename, 
                             badpixelimage=None, 
-                            create_variance=False, 
-                            clean_cosmics=True,
+                            create_variance=True, 
+                            clean_cosmics=False,
                             mosaic=True,
                             verbose=False)
+
+        #
+        # Find the ARC closest in time to this frame
+        #
+        obj_jd = hdulist[0].header['JD']
+        delta_jd = numpy.fabs(arc_obstimes - obj_jd)
+        good_arc_idx = numpy.argmin(delta_jd)
+        good_arc = arc_mosaic_list[good_arc_idx]
+        logger.info("Using ARC %s for wavelength calibration" % (good_arc))
+        
         #
         # Trial: replace all 0 value pixels with NaNs
         #
-        for ext in hdu[1:]:
-            ext.data[ext.data <= 0] = numpy.NaN
+        bpm = hdu[3].data
+        hdu[1].data[bpm == 1] = numpy.NaN
+
+        # for ext in hdu[1:]:
+        #     ext.data[ext.data <= 0] = numpy.NaN
+
         pysalt.clobberfile(mosaic_filename)
+        logger.info("Writing mosaiced OBJ file to %s" % (mosaic_filename))
         hdu.writeto(mosaic_filename, clobber=True)
 
         pysalt.clobberfile(out_filename)
         # spectrectify writes to disk, no need to do so here
-        specrectify(mosaic_filename, outimages=out_filename, outpref='', 
-                    solfile=dbfile, caltype='line', 
-                    function='legendre',  order=3, inttype='interp', 
-                    w1=None, w2=None, dw=None, nw=None,
-                    blank=0.0, clobber=True, logfile=logfile, verbose=True)
+        # specrectify(mosaic_filename, outimages=out_filename, outpref='', 
+        #             solfile=dbfile, caltype='line', 
+        #             function='legendre',  order=3, inttype='interp', 
+        #             w1=None, w2=None, dw=None, nw=None,
+        #             blank=0.0, clobber=True, logfile=logfile, verbose=True)
         
-        #
-        # Now we have a full 2-d spectrum, but still with emission lines
-        #
+        # #
+        # # Now we have a full 2-d spectrum, but still with emission lines
+        # #
         
-        #
-        # Next, find good regions with no source contamation
-        #
-        hdu_rect = pyfits.open(out_filename)
-        hdu_rect.info()
+        # #
+        # # Next, find good regions with no source contamation
+        # #
+        # hdu_rect = pyfits.open(out_filename)
+        # hdu_rect.info()
 
-        src_region = [1500,2400] # Jay
-        src_region = [1850,2050] # Greg
+        # src_region = [1500,2400] # Jay
+        # src_region = [1850,2050] # Greg
 
-        #intspec = get_integrated_spectrum(hdu_rect, out_filename)
-        #slitprof, skymask = find_slit_profile(hdu_rect, out_filename) # Jay
-        slitprof, skymask = find_slit_profile(hdu_rect, out_filename, src_region)  # Greg
-        print skymask.shape[0]
+        # #intspec = get_integrated_spectrum(hdu_rect, out_filename)
+        # #slitprof, skymask = find_slit_profile(hdu_rect, out_filename) # Jay
+        # slitprof, skymask = find_slit_profile(hdu_rect, out_filename, src_region)  # Greg
+        # print skymask.shape[0]
 
-        hdu_rect['SCI'].data /= slitprof
+        # hdu_rect['SCI'].data /= slitprof
 
-        rectflat_filename = "OBJ_flat_%s" % (fb)
-        pysalt.clobberfile(rectflat_filename)
-        hdu_rect.writeto(rectflat_filename, clobber=True)
+        # rectflat_filename = "OBJ_flat_%s" % (fb)
+        # pysalt.clobberfile(rectflat_filename)
+        # hdu_rect.writeto(rectflat_filename, clobber=True)
 
-        #
-        # Block out the central region of the chip as object
-        #
-        skymask[src_region[0]/biny:src_region[1]/biny] = False
-        sky_lines = bottleneck.nanmedian(
-            hdu_rect['SCI'].data[skymask].astype(numpy.float64),
-            axis=0)
-        print sky_lines.shape
+        # #
+        # # Block out the central region of the chip as object
+        # #
+        # skymask[src_region[0]/biny:src_region[1]/biny] = False
+        # sky_lines = bottleneck.nanmedian(
+        #     hdu_rect['SCI'].data[skymask].astype(numpy.float64),
+        #     axis=0)
+        # print sky_lines.shape
         
-        #
-        # Now subtract skylines
-        #
-        hdu_rect['SCI'].data -= sky_lines
-        skysub_filename = "OBJ_skysub_%s" % (fb)
-        pysalt.clobberfile(skysub_filename)
-        hdu_rect.writeto(skysub_filename, clobber=True)
+        # #
+        # # Now subtract skylines
+        # #
+        # hdu_rect['SCI'].data -= sky_lines
+        # skysub_filename = "OBJ_skysub_%s" % (fb)
+        # pysalt.clobberfile(skysub_filename)
+        # hdu_rect.writeto(skysub_filename, clobber=True)
         
     return
 
