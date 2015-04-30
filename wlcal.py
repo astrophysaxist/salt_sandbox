@@ -25,6 +25,8 @@ import pysalt.mp_logging
 import logging
 
 
+import matplotlib.pyplot as pl
+
 #
 # Line info columns:
 #
@@ -387,13 +389,51 @@ def find_matching_lines(ref_lines, lineinfo,
 
 
 
+def manual_loadtxt(filename, n_cols=2):
+
+    data = []
+
+    with open(filename, "r") as f:
+        
+        for line in f.readlines():
+            if (len(line) <= 0 or line[0] == "#"):
+                # this is a comment line
+                continue
+
+            linedata = [0] * n_cols
+            for idx, item in enumerate(line.split()[:n_cols]):
+                try:
+                    linedata[idx] = (float(item))
+                except:
+                    pass
+                
+            data.append(linedata)
+
+    print data
+    print len(data)
+    x = numpy.array(data)
+    print x.shape
+
+    numpy.savetxt(sys.stdout, numpy.array(data), "%.5f")
+
+    return numpy.array(data)
+
 
 def find_wavelength_solution(filename, line):
 
     logger = logging.getLogger("FindWLS")
 
-    hdulist = pyfits.open(filename)
-    #hdulist.info()
+    if (type(filename) == str and os.path.isfile(filename)):
+        hdulist = pyfits.open(filename)
+    elif (type(filename) == pyfits.hdu.hdulist.HDUList):
+        hdulist = filename
+    else:
+        logger.error("Invalid input, needs to be either HDUList or string, but found %s" % (str(type(filename))))
+        return None
+
+    if (line == None):
+        line = hdulist['SCI'].data.shape[0] / 2
+        logger.info("Picking the central row, # = %d" % (line))
 
     avg_width = 10
     spec = extract_arc_spectrum(hdulist, line, avg_width)
@@ -459,13 +499,18 @@ def find_wavelength_solution(filename, line):
     #
     lamp=hdulist[0].header['LAMPID'].strip().replace(' ', '')
     lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.txt" % lamp)
+    lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.salt" % lamp)
     _, fn_only = os.path.split(lampfile)
     logger.info("Reading calibration line wavelengths from data->%s" % (fn_only))
     logger.info("Full path to lamp line list: %s" % (lampfile))
     #lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.wav" % lamp)
     #lampfile=pysalt.get_data_filename("pysalt$data/linelists/Ar.salt")
     #lampfile="Ar.lines"
-    lines = numpy.loadtxt(lampfile)
+    try:
+        lines = numpy.loadtxt(lampfile)
+    except:
+        lines = manual_loadtxt(lampfile)
+
     #print lines.shape
     #print lines
 
@@ -716,6 +761,50 @@ def find_wavelength_solution(filename, line):
         }
 
 
+def create_wl_calibration_plot(wls_data, hdulist, plotfile):
+
+    fig = pl.figure()
+    ax = fig.add_subplot(111)
+
+    spec_combined = wls_data['spec_combined']
+
+    # find wavelength range to plot
+    l_min, l_max = numpy.min(spec_combined[:,0]), numpy.max(spec_combined[:,0])
+    # and use this range for the plot
+    ax.set_xlim((l_min, l_max))
+
+    # also find good min and max ranges
+    f_min, f_max = bottleneck.nanmin(spec_combined[:,1]), bottleneck.nanmax(spec_combined[:,1])
+    # ax.set_ylim((0.9*f_min if f_min > 1 else 1, 1.1*f_max))
+    ax.set_ylim((100, 1.1*f_max))
+    
+    # plot the actual spectrum we extracted for calibration
+    ax.plot(spec_combined[:,0], spec_combined[:,1], "-g")
+
+    # now draw vertical lines showing where we the arc lines from the catalog are
+    for catline in wls_data['linelist_ref']:
+        ax.axvline(x=catline[0], color='grey')
+
+    # set the y-scale to be logarithmic
+    ax.set_yscale('log')
+
+    # add some labels
+    ax.set_xlabel("Wavelength [angstroems]")
+    ax.set_ylabel("flux [counts]")
+    ax.set_title("name of file")
+
+    fig.subplots_adjust(left=0.09, bottom=0.08, right=0.98, top=0.93,
+                wspace=None, hspace=None)
+
+    #fig.tight_layout(pad=0.1)
+
+    if (not plotfile == None):
+        fig.savefig(plotfile)
+    else:
+        fig.show()
+        pl.show()
+
+
 
 
 if __name__ == "__main__":
@@ -723,8 +812,18 @@ if __name__ == "__main__":
     logger_setup = pysalt.mp_logging.setup_logging()
 
     filename = sys.argv[1]
-    line = int(sys.argv[2])
 
-    wls_data = find_wavelength_solution(filename, line)
+    line = None
+    try:
+        line = int(sys.argv[2])
+    except:
+        pass
+
+    hdulist = pyfits.open(filename)
+
+    wls_data = find_wavelength_solution(hdulist, line)
+
+    plotfile = filename[:-5]+".png"
+    create_wl_calibration_plot(wls_data, hdulist, plotfile)
 
     pysalt.mp_logging.shutdown_logging(logger_setup)
