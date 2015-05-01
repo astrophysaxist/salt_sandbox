@@ -92,13 +92,13 @@ def match_line_catalogs(arc, ref, matching_radius, verbose=False,
     matched = numpy.zeros((arc.shape[0], (arc.shape[1]+ref.shape[1])))
     matched[:,:arc.shape[1]] = arc
     matched[:,arc.shape[1]:] = ref[i]
-    print "XXXXXXXXXXXX\n"*3,ref.shape, ref[i].shape, i.shape, bad_matches.shape
-    print bad_matches
+    #print "XXXXXXXXXXXX\n"*3,ref.shape, ref[i].shape, i.shape, bad_matches.shape
+    #print bad_matches
     numpy.savetxt("matched_raw", matched)
     numpy.savetxt("matched_bad", bad_matches)
     #sys.exit(0)
 
-    print "XXXX\n"*3
+    #print "XXXX\n"*3
     matched = matched[~bad_matches]
 
     #
@@ -499,7 +499,7 @@ def find_wavelength_solution(filename, line):
     #
     lamp=hdulist[0].header['LAMPID'].strip().replace(' ', '')
     lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.txt" % lamp)
-    lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.salt" % lamp)
+    #lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.salt" % lamp)
     _, fn_only = os.path.split(lampfile)
     logger.info("Reading calibration line wavelengths from data->%s" % (fn_only))
     logger.info("Full path to lamp line list: %s" % (lampfile))
@@ -642,7 +642,7 @@ def find_wavelength_solution(filename, line):
     logger.info("Refining WLS using all %d lines" % (lineinfo.shape[0]))
     for iteration in range(3):
 
-        sys.stdout.write("\n\n\n"); sys.stdout.flush()
+        #sys.stdout.write("\n\n\n"); sys.stdout.flush()
 
         _linelist = numpy.array(lineinfo)
 
@@ -668,7 +668,7 @@ def find_wavelength_solution(filename, line):
                                           col_ref=0,
                                           dumpfile="finalmatch.%d" % (iteration+1))
 
-        logger.info("WLS Refinement step %3d: now %3d matches!" % (
+        logger.debug("WLS Refinement step %3d: now %3d matches!" % (
                 iteration+1, new_matches.shape[0]))
 
         # -- for debugging --
@@ -687,7 +687,7 @@ def find_wavelength_solution(filename, line):
             sigma = scipy.stats.scoreatpercentile(diff_angstroem[~likely_outlier], [16,84])
             std = 0.5*(sigma[1]-sigma[0])
             likely_outlier = (diff_angstroem > med+2*std) | (diff_angstroem < med-2*std)
-            print med, std, stdx
+            logger.debug("Med/Std/StdX= %f / %f / %f" % (med, std, stdx))
 
         # Now we have a better idea on outliers, so reject them and work with 
         # what's left
@@ -696,7 +696,7 @@ def find_wavelength_solution(filename, line):
                 iteration+1, new_matches.shape[0]))
 
         # And with the matched line list, compute a new wavelength solution
-        wls = compute_wavelength_solution(new_matches, max_order=3+iteration)
+        wls = compute_wavelength_solution(new_matches, max_order=4)#+iteration)
 
         # -- for debugging --
         numpy.savetxt("matched.outlierreject.iter%d" % (iteration+1), new_matches)
