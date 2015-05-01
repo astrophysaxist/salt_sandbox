@@ -119,8 +119,8 @@ def tiledata(hdulist, rssgeom):
             exts['VAR'].append(var_ext)
             exts['BPM'].append(bpm_ext)
 
-    print sci_exts
-    print detsecs
+    #print sci_exts
+    #print detsecs
 
     #
     # Better make sure we have all 6 CCDs
@@ -142,7 +142,7 @@ def tiledata(hdulist, rssgeom):
     for name in exts:
         exts[name] = numpy.array(exts[name])[detsec_sort]
 
-    print exts
+    #print exts
 
     #
     # Now we have all extensions in the right order
@@ -164,11 +164,13 @@ def tiledata(hdulist, rssgeom):
     width = numpy.sum(amp_width) + 2*gap/binx # + numpy.sum(numpy.fabs((xshift/binx).round()))
     height = numpy.max(amp_height) #+ numpy.sum(numpy.fabs((yshift/biny).round()))
 
-    print width, height
-    print xshift
-    print yshift
+    #print width, height
+    #print xshift
+    #print yshift
 
     for name in ext_order:
+
+        logger.info("Starting tiling for extension %s !" % (name))
 
         # Now create the mosaics
         data = numpy.empty((height, width))
@@ -187,7 +189,7 @@ def tiledata(hdulist, rssgeom):
 
             endx = startx + amp_width[i]
 
-            logger.info("Putting extension %d (%s) at X=%d -- %d (gaps=%d, shift=%d)" % (
+            logger.debug("Putting extension %d (%s) at X=%d -- %d (gaps=%d, shift=%d)" % (
                 i, name, startx, endx, dx_gaps, dx_shift))
             #logger.info("input size: %d x %d" % (amp_width[i], amp_height[i]))
             #logger.info("output size: %d x %d" % (amp_width[i], height))
@@ -195,9 +197,10 @@ def tiledata(hdulist, rssgeom):
 
         imghdu = pyfits.ImageHDU(data=data)
         imghdu.name = name
-
         out_hdus.append(imghdu)
     
+    logger.info("Finished tiling for all %d data products" % (len(ext_order)))
+
     return pyfits.HDUList(out_hdus)
 
 
@@ -336,8 +339,8 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
             logger.debug("mosaicing -- GAP:%f - X-shift:%f/%f  y-shift:%f/%f  rotation:%f/%f" % (
                 gap, xshift[0], xshift[1], yshift[0], yshift[1], rotation[0], rotation[1]))
 
-            logger.info("File structure before mosaicing:")
-            hdulist.info()
+            #logger.info("File structure before mosaicing:")
+            #hdulist.info()
 
             gap = 90
             xshift = [0.0, +5.9, -2.1]
