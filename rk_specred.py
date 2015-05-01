@@ -72,6 +72,138 @@ import numpy
 #
 import wlcal
 
+def tiledata(hdulist, rssgeom):
+
+    logger = logging.getLogger("TileData")
+
+    out_hdus = [hdulist[0]]
+
+    gap, xshift, yshift, rotation = rssgeom
+    xshift = numpy.array(xshift)
+    yshift = numpy.array(yshift)
+
+    # Gather information about existing extensions
+    sci_exts = []
+    var_exts = []
+    bpm_exts = []
+    detsecs = []
+
+    exts = {} #'SCI': [], 'VAR': [], 'BPM': [] }
+    ext_order = ['SCI', 'BPM', 'VAR']
+    for e in ext_order:
+        exts[e] = []
+
+    for i in range(1, len(hdulist)):
+        if (hdulist[i].header['EXTNAME'] == 'SCI'):
+            
+            # Remember this function for later use
+            sci_exts.append(i)
+            exts['SCI'].append(i)
+
+            # Also find out the detsec header entry so we can put all chips 
+            # in the right order (blue to red) without having to rely on 
+            # ordering within the file
+            decsec = hdulist[i].header['DETSEC']
+            detsec_startx = int(decsec[1:-1].split(":")[0])
+            detsecs.append(detsec_startx)
+
+                       
+            var_ext, bpm_ext = -1, -1
+            if ('VAREXT' in hdulist[i].header):
+                var_ext = hdulist[i].header['VAREXT']
+            if ('BPMEXT' in hdulist[i].header):
+                bpm_ext = hdulist[i].header['BPMEXT']
+            var_exts.append(var_ext)
+            bpm_exts.append(bpm_ext)
+
+            exts['VAR'].append(var_ext)
+            exts['BPM'].append(bpm_ext)
+
+    print sci_exts
+    print detsecs
+
+    #
+    # Better make sure we have all 6 CCDs
+    #
+    # Problem: How to handle different readout windows here???
+    #
+    if (len(sci_exts) != 6):
+        logger.critical("Could not find all 6 CCD sections!")
+        return
+
+    # convert to numpy array
+    detsecs = numpy.array(detsecs)
+    sci_exts = numpy.array(sci_exts)
+
+    # sort extensions by DETSEC position
+    detsec_sort = numpy.argsort(detsecs)
+    sci_exts = sci_exts[detsec_sort]
+
+    for name in exts:
+        exts[name] = numpy.array(exts[name])[detsec_sort]
+
+    print exts
+
+    #
+    # Now we have all extensions in the right order
+    #
+
+    # Compute how big the output array should be
+    width = 0
+    height = -1
+    amp_width = numpy.zeros_like(sci_exts)
+    amp_height = numpy.zeros_like(sci_exts)
+    for i, ext in enumerate(sci_exts):
+        amp_width[i] = hdulist[ext].data.shape[1]
+        amp_height[i] = hdulist[ext].data.shape[0]
+
+    # Add in the widths of all gaps
+    binx, biny = pysalt.get_binning(hdulist)
+    logger.info("Creating tiled image using binning %d x %d" % (binx, biny))
+
+    width = numpy.sum(amp_width) + 2*gap/binx # + numpy.sum(numpy.fabs((xshift/binx).round()))
+    height = numpy.max(amp_height) #+ numpy.sum(numpy.fabs((yshift/biny).round()))
+
+    print width, height
+    print xshift
+    print yshift
+
+    for name in ext_order:
+
+        # Now create the mosaics
+        data = numpy.empty((height, width))
+        data[:,:] = numpy.NaN
+
+        for i, ext in enumerate(exts[name]): #sci_exts):
+
+            dx_gaps = int( gap * int(i/2) / binx )
+            dx_shift = xshift[int(i/2)]/binx
+            startx = numpy.sum(amp_width[0:i])
+
+            # Add in gaps if applicable
+            startx += dx_gaps
+            # Also factor in the small corrections
+            # startx -= dx_shift
+
+            endx = startx + amp_width[i]
+
+            logger.info("Putting extension %d (%s) at X=%d -- %d (gaps=%d, shift=%d)" % (
+                i, name, startx, endx, dx_gaps, dx_shift))
+            #logger.info("input size: %d x %d" % (amp_width[i], amp_height[i]))
+            #logger.info("output size: %d x %d" % (amp_width[i], height))
+            data[:, startx:endx] = hdulist[ext].data[:,:amp_width[i]]
+
+        imghdu = pyfits.ImageHDU(data=data)
+        imghdu.name = name
+
+        out_hdus.append(imghdu)
+    
+    return pyfits.HDUList(out_hdus)
+
+
+
+            
+
 def salt_prepdata(infile, badpixelimage=None, create_variance=False, 
                   masterbias=None, clean_cosmics=True,
                   flatfield_frame=None, mosaic=False,
@@ -204,13 +336,23 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
             logger.debug("mosaicing -- GAP:%f - X-shift:%f/%f  y-shift:%f/%f  rotation:%f/%f" % (
                 gap, xshift[0], xshift[1], yshift[0], yshift[1], rotation[0], rotation[1]))
 
+            logger.info("File structure before mosaicing:")
+            hdulist.info()
+
+            gap = 90
+            xshift = [0.0, +5.9, -2.1]
+            yshift = [0.0, -2.6,  0.4]
+            rotation = [0,0,0]
+            hdulist = tiledata(hdulist, (gap, xshift, yshift, rotation))
+            #return
+
             # create the mosaic
-            hdulist = pysalt.saltred.saltmosaic.make_mosaic(
-                struct=hdulist, 
-                gap=gap, xshift=xshift, yshift=yshift, rotation=rotation, 
-                interp_type='linear',              
-                boundary='constant', constant=0, geotran=True, fill=False,
-                cleanup=True, log=None, verbose=verbose)
+            # hdulist = pysalt.saltred.saltmosaic.make_mosaic(
+            #     struct=hdulist, 
+            #     gap=gap, xshift=xshift, yshift=yshift, rotation=rotation, 
+            #     interp_type='linear',              
+            #     boundary='constant', constant=0, geotran=True, fill=False,
+            #     cleanup=True, log=None, verbose=verbose)
             logger.debug("done with mosaic")
 
 
@@ -582,6 +724,8 @@ def specred(rawdir, prodir,
 
             # logger.debug("Done with specrectify")
 
+
+    #return
 
     #
     # Now apply wavelength solution found above to your data frames
