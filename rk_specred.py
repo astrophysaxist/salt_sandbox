@@ -71,6 +71,8 @@ import numpy
 # Ralf Kotulla modules
 #
 import wlcal
+import traceline
+import 2dskysub
 
 def tiledata(hdulist, rssgeom):
 
