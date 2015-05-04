@@ -160,11 +160,16 @@ mm_to_A = 10e6
 
 def find_list_of_lines(spec, avg_width):
 
-    max_intensity = numpy.max(spec)
-    x_pixels = numpy.arange(spec.shape[0]) # FITS starts counting pixels at 1
+    logger = logging.getLogger("FindLineList")
 
+    max_intensity = numpy.nanmax(spec)
+    x_pixels = numpy.arange(spec.shape[0]) # FITS starts counting pixels at 1
+    logger.debug("Found max intensity %.1f in %4d pixels" % (max_intensity, spec.shape[0]))
+    numpy.savetxt("fll_spec.in", spec)
+    
     # blockaverage spectrum
-    w=5
+    logger.debug("Block-averaging line spectrum to minimize noise")
+    w=2
     blkavg = numpy.array([
         numpy.average(spec[i-w:i+w]) for i in range(spec.shape[0])])
     numpy.savetxt("blkavg_spec.dat", blkavg)
@@ -172,10 +177,12 @@ def find_list_of_lines(spec, avg_width):
     #
     # median-filter spectrum to get continuum
     #
+    logger.debug("Median-filtering spectrum to estimate continuum")
     continuum = scipy.ndimage.filters.median_filter(spec, 25, mode='reflect')
     numpy.savetxt("continuum_scipy", continuum)
 
-    _med, _std = 0, numpy.max(spec)/2
+    logger.debug("Estimating continuum using wide median-filter to exclude lines")
+    _med, _std = 0, numpy.nanmax(spec)/2
     for i in range(3):
         maybe_continuum = (spec > _med-2*_std) & (spec < _med+2*_std)
         _med = bottleneck.nanmedian(spec[maybe_continuum])
@@ -190,10 +197,29 @@ def find_list_of_lines(spec, avg_width):
     continuum[numpy.isnan(continuum)] = 0.
     numpy.savetxt("continuum", continuum)
 
+    #
+    # Search for peaks
+    # Definition of a peak: A value higher than the two neighboring values
+    #
+    logger.debug("Starting to search for lines")
+    print blkavg.shape
 
-    peak = numpy.array(
-        [(True if blkavg[i]>blkavg[i-1] and blkavg[i]>blkavg[i+1] else False)
-         for i in range(blkavg.shape[0])])
+    numpy.savetxt("fll_blkavg_for_peaks", blkavg)
+    peak = numpy.empty(blkavg.shape, dtype=numpy.bool)
+    peak[:] = False
+    peak[1:-1] = (blkavg[1:-1] > blkavg[:-2]) & (blkavg[1:-1] > blkavg[2:])
+    # peak = numpy.array(
+    #     [(blkavg[i] if blkavg[i]>blkavg[i-1] and blkavg[i]>blkavg[i+1] else 0)
+    #      for i in range(1,blkavg.shape[0]-1)])
+    # peak = numpy.array(
+    #     [(True if blkavg[i]>blkavg[i-1] and blkavg[i]>blkavg[i+1] else False)
+    #      for i in range(blkavg.shape[0])])
+    print peak
+    
+    peak_values = numpy.array(blkavg)
+    peak_values[~peak] = -1
+    numpy.savetxt("peaks_values", peak_values)
+    
     numpy.savetxt("peaks_yesno", peak)
     numpy.savetxt("wl_peaks", numpy.append(
 #        x_pixels[peak].reshape((-1,1)), spec[peak].reshape((-1,1)), axis=1))
@@ -439,6 +465,7 @@ def find_wavelength_solution(filename, line):
     spec = extract_arc_spectrum(hdulist, line, avg_width)
 
     binx, biny = pysalt.get_binning(hdulist)
+    logger.info("Binning: %d x %d" % (binx, biny))
 
     hdr = hdulist[0].header
     rss = RSSModel.RSSModel(
@@ -474,6 +501,8 @@ def find_wavelength_solution(filename, line):
     #     beta=-rss.beta())
     
     # print "resolution element:", rss.calc_resolelement(rss.alpha(), -rss.beta()) * mm_to_A
+    logger.debug("From RSS model: wl-range: %.1f - %.1f [%.1f], dispersion: %.3f" % (
+            blue_edge, red_edge, central_wl, dispersion))
 
     #
     # Now find a list of strong lines
