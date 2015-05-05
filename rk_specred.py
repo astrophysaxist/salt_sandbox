@@ -75,6 +75,7 @@ import wlcal
 import traceline
 import skysub2d
 
+wlmap_fitorder = [2,2]
 
 def find_appropriate_arc(hdulist, arcfilelist, arcinfos={}):
 
@@ -617,8 +618,8 @@ def specred(rawdir, prodir,
             arc_region_file = "ARC_m_%s_traces.reg" % (fb[:-5])
             wls_2darc = traceline.compute_2d_wavelength_solution(
                 arc_filename=hdu_mosaiced, 
-                n_lines_to_trace=25, 
-                fit_order=4,
+                n_lines_to_trace=-50, # trace all lines with S/N > 50 
+                fit_order=wlmap_fitorder,
                 output_wavelength_image="wl+image.fits",
                 debug=False,
                 arc_region_file=arc_region_file)
@@ -732,8 +733,8 @@ def specred(rawdir, prodir,
         arc_region_file = "OBJ_%s_traces.reg" % (fb[:-5])
         wls_2d = traceline.compute_2d_wavelength_solution(
             arc_filename=good_arc, 
-            n_lines_to_trace=25, 
-            fit_order=2,
+            n_lines_to_trace=-50, # trace all lines with S/N > 50 
+            fit_order=wlmap_fitorder,
             output_wavelength_image="wl+image.fits",
             debug=False,
             arc_region_file=arc_region_file)
