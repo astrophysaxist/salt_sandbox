@@ -37,7 +37,7 @@ def trace_arc(data,
               start,
               direction=-1, # -1: downwards, +1: upwards
               max_window_x=5, # how far do we allow the arc to move from one row to the row
-              max_corner_angle=30, # in degrees
+              max_corner_angle=60, # in degrees
               ):
 
     logger = logging.getLogger("TraceArc")
@@ -74,7 +74,7 @@ def trace_arc(data,
     arc_center[:,0] = numpy.NaN
     arc_center[start_y,0] = start_x
 
-    n_pixels_for_corner = 3
+    n_pixels_for_corner = 5
     
     for lines_since_start, next_row_idx in enumerate(row_numbers):
         #logger.debug("Moving from row %4d to %4d" % (current_row_idx, next_row_idx))
@@ -323,9 +323,15 @@ def compute_2d_wavelength_solution(arc_filename,
 
     logger = logging.getLogger("Comp2D-WLS")
 
-    logger.info("Tracing arcs in file %s" % (arc_filename))
+    if (type(arc_filename) == str and os.path.isfile(arc_filename)):
+        # We received a filename as parameter
+        logger.info("Tracing arcs in file %s" % (arc_filename))
+        hdulist = pyfits.open(arc_filename)
+    elif (type(arc_filename) == pyfits.hdu.hdulist.HDUList):
+        # This is already a valid HDUlist, so we don't need to open anything
+        hdulist = arc_filename
 
-    hdulist = pyfits.open(arc_filename)
+        
     line = hdulist['SCI'].data.shape[0]/2
 
     logger.info("Attempting to find wavelength solution")
@@ -336,10 +342,12 @@ def compute_2d_wavelength_solution(arc_filename,
             wls_data = pickle.load(open(pickle_file, "rb"))
             logger.info("Using pickled data - may need to delete --> %s <--" % (pickle_file))
         except:
-            wls_data = wlcal.find_wavelength_solution(filename, line)
+            wls_data = wlcal.find_wavelength_solution(arc_filename, line)
             pickle.dump(wls_data, open(pickle_file, "wb"))
     else:
         wls_data = wlcal.find_wavelength_solution(arc_filename, line)
+
+
     #print wls_data
 
     logger.info("Continuing with tracing lines!\n")
@@ -395,6 +403,10 @@ def compute_2d_wavelength_solution(arc_filename,
     #
     # Also eliminate all lines with nearby companions that might cause problems
     #
+
+    if (n_lines_to_trace < 0):
+        n_lines_to_trace = wls_data['linelist_arc'].shape[0]
+
     sort_sn = numpy.argsort(wls_data['linelist_arc'][:,wlcal.lineinfo_colidx['S2N']])[::-1]
     # print wls_data['linelist_arc'][sort_sn][:10,4]
 
@@ -426,6 +438,8 @@ def compute_2d_wavelength_solution(arc_filename,
     # Now we have a full array of X, Y, and wavelength positions.
     # Go on and fit a full 2-D polynomial fit
     #
+
+    numpy.savetxt("all_traces", traces)
 
     m = polyfit2d(x=traces[:,1],
                   y=traces[:,0],
@@ -514,7 +528,7 @@ if __name__ == "__main__":
     wls_2d = compute_2d_wavelength_solution(
         arc_filename=filename, 
         n_lines_to_trace=n_lines, 
-        fit_order=2,
+        fit_order=3,
         output_wavelength_image="wl+image.fits",
         debug=True,
         arc_region_file="ds9_arc.reg")
