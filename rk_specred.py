@@ -14,7 +14,7 @@ and up to date.
 
 """
 
-import os, sys, glob, shutil
+import os, sys, glob, shutil, time
 
 import numpy
 import pyfits
@@ -74,6 +74,71 @@ from helpers import *
 import wlcal
 import traceline
 import skysub2d
+
+
+def find_appropriate_arc(hdulist, arcfilelist, arcinfos={}):
+
+    hdrs_to_match = [
+        'CCDSUM',
+        'WP-STATE', # Waveplate State Machine State
+        'ET-STATE', # Etalon State Machine State
+        'GR-STATE', # Grating State Machine State
+        'GR-STA',   # Commanded Grating Station
+        'GRATING',  # Commanded grating station
+        'GRTILT',   # Commanded grating angle
+        'BS-STATE', # Beamsplitter State Machine State
+        'FI-STATE', # Filter State Machine State
+        'AR-STATE', # Articulation State Machine State
+        'AR-STA',   # Commanded Articulation Station
+        'CAMANG',   # Commanded Articulation Station
+        'POLCONF',  # Polarization configuration
+        ]
+
+    logger = logging.getLogger("FindGoodArc")
+    logger.info("Checking the following list of ARCs:\n * %s" % ("\n * ".join(arcfilelist)))
+
+    matching_arcs = []
+    for arcfile in arcfilelist:
+        if (arcfile in arcinfos):
+            # use header that we extracted in an earlier run
+            hdr = arcinfos[arcfile]
+        else:
+            # this is a new file we haven't scanned before
+            arc_hdulist = pyfits.open(arcfile)
+            hdr = arc_hdulist[0].header
+            arcinfos[arcfile] = hdr
+            arc_hdulist.close()
+
+        #
+        # Now search for files with the identical spectral setup
+        #
+        matches = True
+        for hdrname in hdrs_to_match:
+            logger.debug("Comparing header key --> %s <--" % (hdrname))
+
+            # if we can't compare the headers we'll assume they won't match
+            if (not hdrname in hdulist[0].header or
+                not hdrname in hdr):
+                matches = False
+                logger.debug("Not found in one of the two files")
+                break
+
+            if (not hdulist[0].header[hdrname] == hdr[hdrname]):
+                matches = False
+                logger.debug("Found in both, but does not match!")
+                break
+
+        # if all headers exist in both files and all headers match, 
+        # then this ARC file should be usable to calibrate the OBJECT frame
+        if (matches):
+            logger.debug("FOUND GOOD ARC")
+            matching_arcs.append(arcfile)
+
+    print "***\n"*3,matching_arcs,"\n***"*3
+
+    return matching_arcs
+
+
 
 def tiledata(hdulist, rssgeom):
 
@@ -384,8 +449,11 @@ def specred(rawdir, prodir,
     logger = logging.getLogger("SPECRED")
 
     #get the name of the files
+    # if (type(infile) == list):
+    #     infile_list = infile
+    # elif (type(infile) == str and os.path.isdir(infile)):
     infile_list=glob.glob(rawdir+'*.fits')
-    
+        
 
     #get the current date for the files
     obsdate=os.path.basename(infile_list[0])[1:9]
@@ -497,8 +565,8 @@ def specred(rawdir, prodir,
     # Keep track of when the ARCs were taken, so we can pick the one closest 
     # in time to the science observation for data reduction
     arc_obstimes = numpy.ones((len(obslog['ARC']))) * -999.9
-    arc_mosaic_list = [None] * len(obslog)
-    arc_mef_list = [None] * len(obslog)
+    arc_mosaic_list = [None] * len(obslog['ARC'])
+    arc_mef_list = [None] * len(obslog['ARC'])
     if (not skip_wavelength_cal_search):
         for idx, filename in enumerate(obslog['ARC']):
             _, fb = os.path.split(filename)
@@ -529,9 +597,6 @@ def specred(rawdir, prodir,
                                 clean_cosmics=False,
                                 mosaic=True,
                                 verbose=False)
-            pysalt.clobberfile(arc_mosaic_filename)
-            hdu_mosaiced.writeto(arc_mosaic_filename, clobber=True)
-            arc_mosaic_list[idx] = arc_mosaic_filename
 
             #
             # Now we have a HDUList of the mosaiced ARC file, so 
@@ -545,8 +610,39 @@ def specred(rawdir, prodir,
             plotfile = arc_mosaic_filename[:-5]+".png"
             wlcal.create_wl_calibration_plot(wls_data, hdu_mosaiced, plotfile)
 
-
+            #
+            # Simulate the ARC spectrum by extracting a 2-D ARC spectrum just 
+            # like we would for the sky-subtraction in OBJECT frames
+            #
+            arc_region_file = "ARC_m_%s_traces.reg" % (fb[:-5])
+            wls_2darc = traceline.compute_2d_wavelength_solution(
+                arc_filename=hdu_mosaiced, 
+                n_lines_to_trace=25, 
+                fit_order=4,
+                output_wavelength_image="wl+image.fits",
+                debug=False,
+                arc_region_file=arc_region_file)
+            wl_hdu = pyfits.ImageHDU(data=wls_2darc)
+            wl_hdu.name = "WAVELENGTH"
+            hdu_mosaiced.append(wl_hdu)
             
+            #
+            # Now go ahead and extract the full 2-d sky
+            #
+            arc_regions = numpy.array([[0, hdu_mosaiced['SCI'].data.shape[0]]])
+            arc2d = skysub2d.make_2d_skyspectrum(
+                hdu_mosaiced,
+                wls_2darc,
+                sky_regions=arc_regions,
+                oversample_factor=1.0,
+                )
+            simul_arc_hdu = pyfits.ImageHDU(data=arc2d)
+            simul_arc_hdu.name = "SIMULATION"
+            hdu_mosaiced.append(simul_arc_hdu)
+            
+            pysalt.clobberfile(arc_mosaic_filename)
+            hdu_mosaiced.writeto(arc_mosaic_filename, clobber=True)
+            arc_mosaic_list[idx] = arc_mosaic_filename
 
 
             # lamp=hdu[0].header['LAMPID'].strip().replace(' ', '')
@@ -572,7 +668,6 @@ def specred(rawdir, prodir,
 
 
     #return
-
     
     #############################################################################
     #
@@ -580,6 +675,7 @@ def specred(rawdir, prodir,
     #
     #############################################################################
     logger.info("Applying wavelength solution to OBJECT frames")
+    arcinfos = {}
     for idx, filename in enumerate(obslog['OBJECT']):
         _, fb = os.path.split(filename)
         hdulist = pyfits.open(filename)
@@ -612,12 +708,22 @@ def specred(rawdir, prodir,
         #
         # Find the ARC closest in time to this frame
         #
-        obj_jd = hdulist[0].header['JD']
-        delta_jd = numpy.fabs(arc_obstimes - obj_jd)
-        good_arc_idx = numpy.argmin(delta_jd)
-        good_arc = arc_mosaic_list[good_arc_idx]
-        logger.info("Using ARC %s for wavelength calibration" % (good_arc))
-        
+        # obj_jd = hdulist[0].header['JD']
+        # delta_jd = numpy.fabs(arc_obstimes - obj_jd)
+        # good_arc_idx = numpy.argmin(delta_jd)
+        # good_arc = arc_mosaic_list[good_arc_idx]
+        # logger.info("Using ARC %s for wavelength calibration" % (good_arc))
+        # good_arc_list = find_appropriate_arc(hdu, obslog['ARC'], arcinfos)
+        good_arc_list = find_appropriate_arc(hdu, arc_mosaic_list, arcinfos)
+        logger.debug("Found these ARCs as appropriate:\n -- %s" % ("\n -- ".join(good_arc_list)))
+        if (len(good_arc_list) == 0):
+            logger.error("Could not find any appropriate ARCs")
+            continue
+        else:
+            good_arc = good_arc_list[0]
+            logger.info("Using ARC %s for wavelength calibration" % (good_arc))
+
+
 
         #
         # Use ARC to trace lines and compute a 2-D wavelength solution
