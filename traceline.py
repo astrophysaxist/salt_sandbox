@@ -28,7 +28,9 @@ import math
 
 import wlcal
 import pickle
-from rk_specred import find_slit_profile
+
+from helpers import *
+# from rk_specred import find_slit_profile
 
 
 def trace_arc(data,
@@ -316,7 +318,8 @@ def compute_2d_wavelength_solution(arc_filename,
                                    n_lines_to_trace=15, 
                                    fit_order=2,
                                    output_wavelength_image=None,
-                                   debug=False):
+                                   debug=False,
+                                   arc_region_file=None):
 
     logger = logging.getLogger("Comp2D-WLS")
 
@@ -396,14 +399,15 @@ def compute_2d_wavelength_solution(arc_filename,
     # print wls_data['linelist_arc'][sort_sn][:10,4]
 
     # Reset ds9_arc
-    pysalt.clobberfile("ds9_arc.reg")
+    if (not arc_region_file == None):
+        pysalt.clobberfile(arc_region_file)
 
     traces = None
     logger.info("Preparing to trace %d lines" % (n_lines_to_trace))
 
     for i in range(n_lines_to_trace):
         linetrace = trace_single_line(fitsdata_gf, wls_data, sort_sn[i],
-                           ds9_region_file="ds9_arc.reg")
+                           ds9_region_file=arc_region_file)
         # print linetrace.shape
         numpy.savetxt("LT.%d" % i, linetrace)
 
@@ -512,7 +516,8 @@ if __name__ == "__main__":
         n_lines_to_trace=n_lines, 
         fit_order=2,
         output_wavelength_image="wl+image.fits",
-        debug=True)
+        debug=True,
+        arc_region_file="ds9_arc.reg")
 
 
     
