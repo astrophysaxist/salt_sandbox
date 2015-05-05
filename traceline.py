@@ -292,18 +292,18 @@ image\
 
 import itertools
 import matplotlib.pyplot as plt
-def polyfit2d(x, y, z, order=3):
-    ncols = (order + 1)**2
+def polyfit2d(x, y, z, order=[3,2]):
+    ncols = (order[0] + 1) * (order[1] + 1)
     G = numpy.zeros((x.size, ncols))
-    ij = itertools.product(range(order+1), range(order+1))
+    ij = itertools.product(range(order[0]+1), range(order[1]+1))
     for k, (i,j) in enumerate(ij):
         G[:,k] = x**i * y**j
     m, _, _, _ = numpy.linalg.lstsq(G, z)
-    return m
+    return m, order
 
-def polyval2d(x, y, m):
-    order = int(numpy.sqrt(len(m))) - 1
-    ij = itertools.product(range(order+1), range(order+1))
+def polyval2d(x, y, m_order):
+    m,order = m_order
+    ij = itertools.product(range(order[0]+1), range(order[1]+1))
     z = numpy.zeros_like(x)
     for a, (i,j) in zip(m, ij):
         z += a * x**i * y**j
@@ -316,7 +316,7 @@ def polyval2d(x, y, m):
 
 def compute_2d_wavelength_solution(arc_filename, 
                                    n_lines_to_trace=15, 
-                                   fit_order=2,
+                                   fit_order=[3,2],
                                    output_wavelength_image=None,
                                    debug=False,
                                    arc_region_file=None):
@@ -404,22 +404,32 @@ def compute_2d_wavelength_solution(arc_filename,
     # Also eliminate all lines with nearby companions that might cause problems
     #
 
-    if (n_lines_to_trace < 0):
-        n_lines_to_trace = wls_data['linelist_arc'].shape[0]
+    if (n_lines_to_trace == 0):
+        # if 0, use all lines
+        trace_line_indices = range(wls_data['linelist_arc'].shape[0])
 
-    sort_sn = numpy.argsort(wls_data['linelist_arc'][:,wlcal.lineinfo_colidx['S2N']])[::-1]
-    # print wls_data['linelist_arc'][sort_sn][:10,4]
+    elif (n_lines_to_trace > 0):
+        # if N positive, use the N strongest lines
+        sort_sn = numpy.argsort(wls_data['linelist_arc'][:,wlcal.lineinfo_colidx['S2N']])[::-1]
+        trace_line_indices = sort_sn[:n_lines_to_trace]
+
+    else: 
+        # if N negative, use the absolute value of N as S/N cutoff
+        strong_enough = wls_data['linelist_arc'][:,wlcal.lineinfo_colidx['S2N']] > 120 #math.fabs(n_lines_to_trace)
+        trace_line_indices = numpy.arange(wls_data['linelist_arc'].shape[0])[strong_enough]
 
     # Reset ds9_arc
     if (not arc_region_file == None):
         pysalt.clobberfile(arc_region_file)
 
     traces = None
-    logger.info("Preparing to trace %d lines" % (n_lines_to_trace))
+    logger.info("Preparing to trace %d lines" % (len(trace_line_indices)))
 
-    for i in range(n_lines_to_trace):
-        linetrace = trace_single_line(fitsdata_gf, wls_data, sort_sn[i],
+    for i in trace_line_indices: #range(n_lines_to_trace):
+        linetrace = trace_single_line(fitsdata_gf, wls_data, i,
                            ds9_region_file=arc_region_file)
+        # linetrace = trace_single_line(fitsdata_gf, wls_data, sort_sn[i],
+        #                    ds9_region_file=arc_region_file)
         # print linetrace.shape
         numpy.savetxt("LT.%d" % i, linetrace)
 
@@ -528,7 +538,7 @@ if __name__ == "__main__":
     wls_2d = compute_2d_wavelength_solution(
         arc_filename=filename, 
         n_lines_to_trace=n_lines, 
-        fit_order=3,
+        fit_order=[3,2],
         output_wavelength_image="wl+image.fits",
         debug=True,
         arc_region_file="ds9_arc.reg")
