@@ -743,29 +743,6 @@ def find_wavelength_solution(filename, line):
 
     numpy.savetxt("matched.cat.final", final_match)
 
-    # Apply WLS to FITS header
-    
-    hdr = hdulist['SCI'].header
-    hdr['CD1_1'] = wls[1]
-    hdr['CRVAL1'] = wls[0]
-    hdr['CRPIX1'] = 1.0
-    hdr['CTYPE1'] = 'PIXEL' #'LAMBDA'
-
-    # set the right reference line
-    hdr['CRPIX2'] = 1.
-    hdr['CRVAL2'] = line
-    hdr['CTYPE2'] = "PIXEL"
-    hdr['CD2_2'] = 1.0
-
-    for hdrname in ['CDELT1', 'CDELT2']:
-        if (hdrname in hdr): del hdr[hdrname]
-
-    # Write a wavelength calibrated strip spectrum
-    strip = numpy.repeat(spec.reshape((-1,1)), 100, axis=1)
-    # print spec.shape, strip.shape
-    hdulist['SCI'].data = strip.T
-    if (os.path.isfile("test_out.fits")): os.remove("test_out.fits")
-    hdulist.writeto("test_out.fits", clobber=True)
 
     # Also save the original spectrum as text file
     spec_x = numpy.polynomial.polynomial.polyval(numpy.arange(spec.shape[0]), wls).reshape((-1,1))
@@ -854,5 +831,7 @@ if __name__ == "__main__":
 
     plotfile = filename[:-5]+".png"
     create_wl_calibration_plot(wls_data, hdulist, plotfile)
+
+    hdulist.writeto("wlcal_dumpout.fits", clobber=True)
 
     pysalt.mp_logging.shutdown_logging(logger_setup)
