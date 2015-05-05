@@ -70,9 +70,10 @@ import numpy
 #
 # Ralf Kotulla modules
 #
+from helpers import *
 import wlcal
 import traceline
-import 2dskysub
+import skysub2d
 
 def tiledata(hdulist, rssgeom):
 
@@ -356,173 +357,13 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
             #     struct=hdulist, 
             #     gap=gap, xshift=xshift, yshift=yshift, rotation=rotation, 
             #     interp_type='linear',              
-            #     boundary='constant', constant=0, geotran=True, fill=False,
+            #     #boundary='constant', constant=0, geotran=True, fill=False,
+            #     boundary='constant', constant=0, geotran=False, fill=False,
             #     cleanup=True, log=None, verbose=verbose)
             logger.debug("done with mosaic")
 
 
     return hdulist
-
-
-#################################################################################
-#################################################################################
-#################################################################################
-def get_integrated_spectrum(hdu_rect, filename):
-    """
-
-    This function integrates the spectrum along the spectral axis, returning a 
-    1-D array of integrated intensities. 
-
-    """
-    
-    _,fb = os.path.split(filename)
-    logger = logging.getLogger("GetIntegratedSpec(%s)" % (fb))
-
-    integrated_intensity = bottleneck.nansum(hdu_rect['SCI'].data.astype(numpy.float32), axis=1)
-    logger.info("Integrated intensity: covers %d pixels along slit" % (integrated_intensity.shape[0]))
-    # pyfits.PrimaryHDU(data=integrated_intensity).writeto()
-    numpy.savetxt("1d_%s.cat" % (fb[:-5]), integrated_intensity)
-
-    return integrated_intensity
-
-
-
-#################################################################################
-#################################################################################
-#################################################################################
-def find_slit_profile(hdulist, filename, source_region=[1400,2600]):
-    """
-
-    Starting with the intensity profile along the slit, reject all likely 
-    sources (bright things), small-scale fluctuations (more sources, cosmics, 
-    etc), and finally produce a spline-smoothed profile of intensity along the
-    slit. This can then be used to correct the image data with the goal to 
-    improve sky-line subtraction.
-
-    """
-
-
-    _,fb = os.path.split(filename)
-    logger = logging.getLogger("FindSlitProf")
-
-    #
-    # Get binning information
-    #
-    binx, biny = pysalt.get_binning(hdulist)
-    if (binx == None):
-        logger.error("Can't find binning information. Does header CCDSUM exist?")
-        return None
-
-    #
-    # Get integrated slit profile
-    #
-    integrated_intensity = bottleneck.nansum(hdulist['SCI'].data.astype(numpy.float32), axis=1)
-    logger.info("Integrated intensity: covers %d pixels along slit" % (integrated_intensity.shape[0]))
-    # pyfits.PrimaryHDU(data=integrated_intensity).writeto()
-    numpy.savetxt("1d_%s.cat" % (fb[:-5]), integrated_intensity)
-
-    #
-    # First of all, reject all pixels with zero fluxes
-    #
-    bad_pixels = (integrated_intensity <= 0) | (numpy.isnan(integrated_intensity))
-
-    # Next, find average level across the profile.
-    # That way, we hopefully can reject all bright targets
-    bright_lim, faint_lim = 1e9, 0
-    # background = (integrated_intensity <= bright_lim) | \
-    #              (integrated_intensity >= faint_lim)
-    background = ~bad_pixels
-    likely_background_profile = numpy.array(integrated_intensity)
-    likely_background_profile[~background] = numpy.NaN
-    numpy.savetxt("1d_bg_%s.cat.start" % (fb[:-5]), likely_background_profile)
-
-    for i in range(5):
-        logger.info("Iteration %d: %d valid pixels considered BG" % (i+1, numpy.sum(background)))
-
-        # compute median of all pixels considered background
-        med = bottleneck.nanmedian(integrated_intensity[background])
-        std = bottleneck.nanstd(integrated_intensity[background])
-        logger.info("Med/Std: %f   %f" % (med, std))
-        # Now set new bright and faint limits
-        bright_lim, faint_lim = med+3*std, med-3*std
-
-        # Apply new mask to intensities
-        background = background & \
-                     (integrated_intensity <= bright_lim) & \
-                     (integrated_intensity >= faint_lim)
-
-        likely_background_profile = numpy.array(integrated_intensity)
-        likely_background_profile[~background] = numpy.NaN
-        numpy.savetxt("1d_bg_%s.cat.%d" % (fb[:-5], i+1), likely_background_profile)
-
-    skymask = ~bad_pixels & background
-
-    #
-    # Reject small outliers by median-filtering across a number of pixels
-    #
-    half_window_size = 25
-    
-    filtered_bg = numpy.array([
-        bottleneck.nanmedian(
-            likely_background_profile[i-half_window_size:i+half_window_size]) 
-        for i in range(likely_background_profile.shape[0])])
-    numpy.savetxt("1d_bg_%s.cat.filtered" % (fb[:-5]), filtered_bg)
-
-    #
-    # To smooth things out even better, fit a very low order spline, 
-    # avoiding the central area where the source likely is located
-    #
-    # Use 50 basepoints for the fitting polynomial
-    x = numpy.arange(filtered_bg.shape[0])
-    print 400/biny, 3600/biny, 100/biny
-
-    if (not source_region == None):
-        print "X:", filtered_bg.shape
-        do_not_fit = ((x<1400/biny) | (x>2600/biny)) & skymask
-
-        t = numpy.linspace(numpy.min(x[do_not_fit])+1, numpy.max(x[do_not_fit])-1, 50) #100/biny)
-        avoidance = (t>source_region[0]/biny) & (t<source_region[1]/biny)
-        t = t[~avoidance]
-        print t
-    else:
-        do_not_fit = skymask
-        t = numpy.linspace(numpy.min(x)+1, numpy.max(x)-1, 50)
-        
-    print "Using spline fitting base points\n",t
-
-    w = numpy.ones(filtered_bg.shape[0])
-    w[~skymask] = 0
-    numpy.savetxt("slitprofile.weights", w)
-    numpy.savetxt("slitprofile.do_not_fit", do_not_fit)
-    
-    print "xrange:",numpy.min(x[do_not_fit]), numpy.max(x[do_not_fit])
-    numpy.savetxt("1d_bg_%s.cat.basepoints" % (fb[:-5]), t, "%.2f")
-    numpy.savetxt("1d_bg_%s.cat.wt" % (fb[:-5]), w)
-    # lsq_spline = scipy.interpolate.LSQUnivariateSpline(
-    #     x=x[do_not_fit], y=filtered_bg[do_not_fit], t=t, 
-    #     w=None, bbox=[None, None], k=2)
-    lsq_spline = scipy.interpolate.LSQUnivariateSpline(
-        x=x, y=filtered_bg, t=t, 
-        w=w, bbox=[None, None], k=2)
-    numpy.savetxt("1d_bg_%s.cat.fit" % (fb[:-5]), lsq_spline(x))
-
-    #
-    # Also try fitting a polynomial to the function
-    #
-    #numpy.polyfit(
-
-    #
-    # Now normalize this line profile so we can use it to flatten out the slit image
-    #
-    avg_flux = bottleneck.nanmean(filtered_bg)
-    print "average slit across slit profile:", avg_flux
-
-    #slit_flattening = filtered_bg / avg_flux
-    slit_flattening = lsq_spline(x) / avg_flux
-    # Fill in gaps with ones
-    slit_flattening[numpy.isnan(slit_flattening)] = 1.0
-
-    return slit_flattening.reshape((-1,1)), skymask, filtered_bg.reshape((-1,1))/avg_flux
 
 
 
@@ -732,9 +573,12 @@ def specred(rawdir, prodir,
 
     #return
 
+    
+    #############################################################################
     #
     # Now apply wavelength solution found above to your data frames
     #
+    #############################################################################
     logger.info("Applying wavelength solution to OBJECT frames")
     for idx, filename in enumerate(obslog['OBJECT']):
         _, fb = os.path.split(filename)
@@ -750,9 +594,20 @@ def specred(rawdir, prodir,
         hdu = salt_prepdata(filename, 
                             badpixelimage=None, 
                             create_variance=True, 
-                            clean_cosmics=False,
+                            clean_cosmics=False, #True,
                             mosaic=True,
                             verbose=False)
+
+        pysalt.clobberfile(mosaic_filename)
+        logger.info("Writing mosaiced OBJ file to %s" % (mosaic_filename))
+        hdu.writeto(mosaic_filename, clobber=True)
+
+        # Make backup of the image BEFORE sky subtraction
+        # make sure to copy the actual data, not just create a duplicate reference
+        presub_hdu = pyfits.ImageHDU(data=numpy.array(hdu['SCI'].data),
+                                     header=hdu['SCI'].header)
+        presub_hdu.name = 'SCIRAW'
+        hdu.append(presub_hdu)
 
         #
         # Find the ARC closest in time to this frame
@@ -763,20 +618,67 @@ def specred(rawdir, prodir,
         good_arc = arc_mosaic_list[good_arc_idx]
         logger.info("Using ARC %s for wavelength calibration" % (good_arc))
         
+
         #
-        # Trial: replace all 0 value pixels with NaNs
+        # Use ARC to trace lines and compute a 2-D wavelength solution
         #
-        bpm = hdu[3].data
-        hdu[1].data[bpm == 1] = numpy.NaN
+        logger.info("Computing 2-D wavelength map")
+        arc_region_file = "OBJ_%s_traces.reg" % (fb[:-5])
+        wls_2d = traceline.compute_2d_wavelength_solution(
+            arc_filename=good_arc, 
+            n_lines_to_trace=25, 
+            fit_order=2,
+            output_wavelength_image="wl+image.fits",
+            debug=False,
+            arc_region_file=arc_region_file)
+        wl_hdu = pyfits.ImageHDU(data=wls_2d)
+        wl_hdu.name = "WAVELENGTH"
+        hdu.append(wl_hdu)
+        
+        #
+        # Now go ahead and extract the full 2-d sky
+        #
+        sky_regions = numpy.array([[0, hdu['SCI'].data.shape[0]]])
+        sky2d = skysub2d.make_2d_skyspectrum(
+            hdu,
+            wls_2d,
+            sky_regions=sky_regions,
+            oversample_factor=1.0,
+            )
 
-        # for ext in hdu[1:]:
-        #     ext.data[ext.data <= 0] = numpy.NaN
+        sky_hdu = pyfits.ImageHDU(data=sky2d)
+        sky_hdu.name = "SKY"
+        hdu.append(sky_hdu)
 
-        pysalt.clobberfile(mosaic_filename)
-        logger.info("Writing mosaiced OBJ file to %s" % (mosaic_filename))
-        hdu.writeto(mosaic_filename, clobber=True)
+        # Don't forget to subtract the sky off the image
+        hdu['SCI'].data -= sky2d
 
+
+        #
+        # And finally write reduced frame back to disk
+        #
+        out_filename = "OBJ_%s" % (fb)
         pysalt.clobberfile(out_filename)
+        hdu.writeto(out_filename, clobber=True)
+
+
+
+
+
+
+
+
+
+        # #
+        # # Trial: replace all 0 value pixels with NaNs
+        # #
+        # bpm = hdu[3].data
+        # hdu[1].data[bpm == 1] = numpy.NaN
+
+        # # for ext in hdu[1:]:
+        # #     ext.data[ext.data <= 0] = numpy.NaN
+
+
         # spectrectify writes to disk, no need to do so here
         # specrectify(mosaic_filename, outimages=out_filename, outpref='', 
         #             solfile=dbfile, caltype='line', 
