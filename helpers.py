@@ -61,8 +61,10 @@ def find_slit_profile(hdulist, filename, source_region=[1400,2600]):
 
     """
 
-
-    _,fb = os.path.split(filename)
+    try:
+        _,fb = os.path.split(filename)
+    except:
+        fb = "xxx.fits"
     logger = logging.getLogger("FindSlitProf")
 
     #

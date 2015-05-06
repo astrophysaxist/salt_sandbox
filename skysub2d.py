@@ -268,7 +268,7 @@ def make_2d_skyspectrum(hdulist,
         all_skies, 
         n_basepoints=n_basepoints,
         N_min=10,
-        show_plot_range=[5800,6000],
+        show_plot_range=None, #[5800,6000],
         )
 
 
