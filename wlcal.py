@@ -137,7 +137,7 @@ def extract_arc_spectrum(hdulist, line=None, avg_width=20):
     logger = logging.getLogger("ExtractSpec")
 
     # Find central line based on the dimensions
-    logger.info("Extracting average of +/- %d lines around y = %4d" % (
+    logger.debug("Extracting average of +/- %d lines around y = %4d" % (
             avg_width, line))
     center = hdulist['SCI'].data.shape[0] / 2 if line == None else line
 
@@ -202,7 +202,7 @@ def find_list_of_lines(spec, avg_width):
     # Definition of a peak: A value higher than the two neighboring values
     #
     logger.debug("Starting to search for lines")
-    print blkavg.shape
+    # print blkavg.shape
 
     numpy.savetxt("fll_blkavg_for_peaks", blkavg)
     peak = numpy.empty(blkavg.shape, dtype=numpy.bool)
@@ -214,7 +214,7 @@ def find_list_of_lines(spec, avg_width):
     # peak = numpy.array(
     #     [(True if blkavg[i]>blkavg[i-1] and blkavg[i]>blkavg[i+1] else False)
     #      for i in range(blkavg.shape[0])])
-    print peak
+    # print peak
     
     peak_values = numpy.array(blkavg)
     peak_values[~peak] = -1
@@ -277,7 +277,7 @@ def compute_wavelength_solution(matched, max_order=3):
     coeffs, rest = ret
     residuals, rank, singular_values, rcond = rest
 
-    logger.info("Fit coeffs: %s" % (" ".join(["%.6e" % c for c in coeffs])))
+    logger.debug("Fit coeffs: %s" % (" ".join(["%.6e" % c for c in coeffs])))
     logger.debug("residuals: %e" % (residuals))
     logger.debug("rank: %d" % (rank))
     logger.debug("singular_values: %s" % (" ".join(["%e" % sv for sv in singular_values])))
@@ -435,10 +435,10 @@ def manual_loadtxt(filename, n_cols=2):
                 
             data.append(linedata)
 
-    print data
-    print len(data)
+    # print data
+    # print len(data)
     x = numpy.array(data)
-    print x.shape
+    # print x.shape
 
     numpy.savetxt(sys.stdout, numpy.array(data), "%.5f")
 
@@ -459,13 +459,13 @@ def find_wavelength_solution(filename, line):
 
     if (line == None):
         line = hdulist['SCI'].data.shape[0] / 2
-        logger.info("Picking the central row, # = %d" % (line))
+        logger.debug("Picking the central row, # = %d" % (line))
 
     avg_width = 10
     spec = extract_arc_spectrum(hdulist, line, avg_width)
 
     binx, biny = pysalt.get_binning(hdulist)
-    logger.info("Binning: %d x %d" % (binx, biny))
+    logger.debug("Binning: %d x %d" % (binx, biny))
 
     hdr = hdulist[0].header
     rss = RSSModel.RSSModel(
@@ -531,7 +531,7 @@ def find_wavelength_solution(filename, line):
     #lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.salt" % lamp)
     _, fn_only = os.path.split(lampfile)
     logger.info("Reading calibration line wavelengths from data->%s" % (fn_only))
-    logger.info("Full path to lamp line list: %s" % (lampfile))
+    logger.debug("Full path to lamp line list: %s" % (lampfile))
     #lampfile=pysalt.get_data_filename("pysalt$data/linelists/%s.wav" % lamp)
     #lampfile=pysalt.get_data_filename("pysalt$data/linelists/Ar.salt")
     #lampfile="Ar.lines"
@@ -591,9 +591,9 @@ def find_wavelength_solution(filename, line):
     #
     # Remember: units here are angstroem !!!
     matching_radius = 4 * dispersion
-    logger.info("Considering lines within %.1f A of a known ARC line as matched!" % (
+    logger.debug("Considering lines within %.1f A of a known ARC line as matched!" % (
             matching_radius))
-    print "before loop:", lineinfo.shape
+    # print "before loop:", lineinfo.shape
 
     for idx, _dispersion in enumerate(trial_dispersions):
 
@@ -628,7 +628,7 @@ def find_wavelength_solution(filename, line):
 
     #print "most matched lines:", n_matches[n_max],
     #print "best dispersion: %f" % (trial_dispersions[n_max])
-    logger.info("Choosing best solution: %4d for dispersion %8.4f A/px" % (
+    logger.debug("Choosing best solution: %4d for dispersion %8.4f A/px" % (
             n_matches[n_max], trial_dispersions[n_max]))
 
     numpy.savetxt("matchcount", numpy.append(trial_dispersions.reshape((-1,1)),
@@ -668,7 +668,7 @@ def find_wavelength_solution(filename, line):
     ############################################################################
     #prev_wls = wls
     #matching_radius = 2*dispersion
-    logger.info("Refining WLS using all %d lines" % (lineinfo.shape[0]))
+    logger.debug("Refining WLS using all %d lines" % (lineinfo.shape[0]))
     for iteration in range(3):
 
         #sys.stdout.write("\n\n\n"); sys.stdout.flush()
@@ -721,7 +721,7 @@ def find_wavelength_solution(filename, line):
         # Now we have a better idea on outliers, so reject them and work with 
         # what's left
         new_matches = new_matches[~likely_outlier]
-        logger.info("WLS Refinement step %3d: %3d matches left after outliers!" % (
+        logger.debug("WLS Refinement step %3d: %3d matches left after outliers!" % (
                 iteration+1, new_matches.shape[0]))
 
         # And with the matched line list, compute a new wavelength solution
