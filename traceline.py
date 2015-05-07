@@ -90,7 +90,7 @@ def trace_arc(data,
         # If next row contains pixels marked as NaN's stop work to avoid going 
         # off into no-mans-land
         if (numpy.sum(numpy.isnan(next_row) > 0)):
-            logger.info("Found illegal pixel in next row (%d, %d), stopping here!" % (
+            logger.debug("Found illegal pixel in next row (%d, %d), stopping here!" % (
                     current_col_idx, next_row_idx))
             break
 
@@ -139,7 +139,7 @@ def trace_arc(data,
                 # We found a corner
                 # --> retroactively stop following the line at the point the line 
                 #     started to deviate
-                logger.info("Corner detected in line %d: %.1f then vs %.1f now" % (
+                logger.debug("Corner detected in line %d: %.1f then vs %.1f now" % (
                         current_row_idx, angle_past, angle_now))
                 avg_past = dx_past / n_pixels_for_corner
                 # for i in range(2*n_pixels_for_corners):
@@ -203,7 +203,7 @@ def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None):
 
     arclines = wls_data['linelist_arc']
     primeline = arclines[line_idx,:]
-    print primeline
+    # print primeline
     arcpos_x = primeline[wlcal.lineinfo_colidx['PIXELPOS']]
     logger.debug("Beginning line-trace at position X=%d, Y=%d" % (arcpos_x, wls_data['line']))
             
@@ -319,7 +319,8 @@ def compute_2d_wavelength_solution(arc_filename,
                                    fit_order=[3,2],
                                    output_wavelength_image=None,
                                    debug=False,
-                                   arc_region_file=None):
+                                   arc_region_file=None,
+                                   return_slitprofile=False):
 
     logger = logging.getLogger("Comp2D-WLS")
 
@@ -518,7 +519,12 @@ def compute_2d_wavelength_solution(arc_filename,
             # logger.info("dumping to file")
             # numpy.savetxt("wl+flux.dump.%d" % (stripwidth), merged)
 
+    if (return_slitprofile):
+        return wl_data.T, slitprofile
+
     return wl_data.T
+
+
 
 
 if __name__ == "__main__":
