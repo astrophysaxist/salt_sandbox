@@ -152,7 +152,8 @@ def compute_spline_sky_spectrum(all_skies,
 def make_2d_skyspectrum(hdulist, 
                         wls_2d,
                         sky_regions=None, 
-                        oversample_factor=2.0):
+                        oversample_factor=2.0,
+                        slitprofile=None):
     """
     Compute a full 2-D sky spectrum, including curvature, based on the input 
     HDUList and the 2-D wavelength solution created from an appropriate ARC 
@@ -194,10 +195,16 @@ def make_2d_skyspectrum(hdulist,
 
     #
     # Now extract some sky-spectrum from the specified y-range 
+    # Make copy to make sure we don't accidently change the data
     #
+    obj_data = hdulist['SCI'].data #numpy.array(hdulist['SCI'].data)
+    if (type(slitprofile) == numpy.ndarray and slitprofile.ndim == 1):
+        # If we have a valid slitprofile (i.e. a 1-d numpy array)
+        obj_data /= slitprofile.reshape((-1,1))
 
-    obj_data = hdulist['SCI'].data
-
+        
+        
+        
     # Remember: Both FITS data __AND__ WLS_2D data are in [y,x] ordering
     all_skies = None
 
@@ -228,6 +235,10 @@ def make_2d_skyspectrum(hdulist,
         all_skies = data_wls if all_skies == None else \
             numpy.append(all_skies, data_wls, axis=0)
 
+    #
+    # XXXXXXXX
+    # Change this to add masked region as separate extension
+    #
     pyfits.HDUList([pyfits.PrimaryHDU(header=hdulist['SCI'].header,
                                       data=obj_masked)]).writeto("obj_masked.fits", clobber=True)
 
