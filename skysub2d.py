@@ -312,8 +312,8 @@ if __name__ == "__main__":
     logger.info("Computing 2-D wavelength map")
     wls_2d = traceline.compute_2d_wavelength_solution(
         arc_filename=arcfile, 
-        n_lines_to_trace=10, 
-        fit_order=2,
+        n_lines_to_trace=-50, 
+        fit_order=[3,2],
         output_wavelength_image="wl+image.fits",
         debug=False)
 
@@ -334,9 +334,17 @@ if __name__ == "__main__":
     user_sky = sys.argv[4]
     sky_regions = numpy.array([x.split(":") for x in user_sky.split(",")]).astype(numpy.int)
 
+    sky_2d = make_2d_skyspectrum(
+            obj_hdulist,
+            wls_2d,
+            sky_regions=sky_regions,
+            oversample_factor=1.0,
+            )
+
     #
     # Perform the sky-subtraction (this is now easy as pie)
     #
+    obj_data = obj_hdulist['SCI'].data
     skysub_data = obj_data - sky_2d
     pyfits.HDUList([pyfits.PrimaryHDU(data=skysub_data)]).writeto("skysub_2d.fits", clobber=True)
 
