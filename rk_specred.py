@@ -691,20 +691,40 @@ def specred(rawdir, prodir,
         hdu = salt_prepdata(filename, 
                             badpixelimage=None, 
                             create_variance=True, 
-                            clean_cosmics=False, #True,
+                            clean_cosmics=False,# True,
                             mosaic=True,
-                            verbose=False)
-
+                            verbose=False,
+        )
         pysalt.clobberfile(mosaic_filename)
         logger.info("Writing mosaiced OBJ file to %s" % (mosaic_filename))
         hdu.writeto(mosaic_filename, clobber=True)
 
+
+        #
+        # Also create the image without cosmic ray rejection, and add it to the 
+        # output file
+        #
+        hdu_nocrj = salt_prepdata(filename, 
+                            badpixelimage=None, 
+                            create_variance=True, 
+                            clean_cosmics=False,
+                            mosaic=True,
+                            verbose=False,
+        )
+        hdu_sci_nocrj = hdu_nocrj['SCI']
+        hdu_sci_nocrj.name = 'SCI.NOCRJ'
+        hdu.append(hdu_sci_nocrj)
+
+
+
         # Make backup of the image BEFORE sky subtraction
         # make sure to copy the actual data, not just create a duplicate reference
-        presub_hdu = pyfits.ImageHDU(data=numpy.array(hdu['SCI'].data),
-                                     header=hdu['SCI'].header)
-        presub_hdu.name = 'SCIRAW'
-        hdu.append(presub_hdu)
+        for source_ext in ['SCI', 'SCI.NOCRJ']:
+            presub_hdu = pyfits.ImageHDU(data=numpy.array(hdu['SCI'].data),
+                                         header=hdu['SCI'].header)
+            presub_hdu.name = source_ext+'.RAW'
+            hdu.append(presub_hdu)
+
 
         #
         # Find the ARC closest in time to this frame
@@ -731,13 +751,14 @@ def specred(rawdir, prodir,
         #
         logger.info("Computing 2-D wavelength map")
         arc_region_file = "OBJ_%s_traces.reg" % (fb[:-5])
-        wls_2d = traceline.compute_2d_wavelength_solution(
+        wls_2d, slitprofile = traceline.compute_2d_wavelength_solution(
             arc_filename=good_arc, 
             n_lines_to_trace=-50, # trace all lines with S/N > 50 
             fit_order=wlmap_fitorder,
             output_wavelength_image="wl+image.fits",
             debug=False,
-            arc_region_file=arc_region_file)
+            arc_region_file=arc_region_file,
+            return_slitprofile=True)
         wl_hdu = pyfits.ImageHDU(data=wls_2d)
         wl_hdu.name = "WAVELENGTH"
         hdu.append(wl_hdu)
@@ -751,15 +772,22 @@ def specred(rawdir, prodir,
             wls_2d,
             sky_regions=sky_regions,
             oversample_factor=1.0,
+            slitprofile=slitprofile,
             )
 
         sky_hdu = pyfits.ImageHDU(data=sky2d)
         sky_hdu.name = "SKY"
         hdu.append(sky_hdu)
 
-        # Don't forget to subtract the sky off the image
-        hdu['SCI'].data -= sky2d
+        sky_hdux = pyfits.ImageHDU(data=sky2d*slitprofile.reshape((-1,1)))
+        sky_hdux.name = "SKY_X"
+        hdu.append(sky_hdux)
 
+        # Don't forget to subtract the sky off the image
+        for source_ext in ['SCI', 'SCI.NOCRJ']:
+            hdu[source_ext].data -= sky2d #(sky2d * slitprofile.reshape((-1,1)))
+
+        numpy.savetxt("OBJ_%s_slit.asc" % (fb[:-5]), slitprofile)
 
         #
         # And finally write reduced frame back to disk

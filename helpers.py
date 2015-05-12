@@ -38,8 +38,9 @@ def get_integrated_spectrum(hdu_rect, filename):
     _,fb = os.path.split(filename)
     logger = logging.getLogger("GetIntegratedSpec(%s)" % (fb))
 
+    
     integrated_intensity = bottleneck.nansum(hdu_rect['SCI'].data.astype(numpy.float32), axis=1)
-    logger.info("Integrated intensity: covers %d pixels along slit" % (integrated_intensity.shape[0]))
+    logger.debug("Integrated intensity: covers %d pixels along slit" % (integrated_intensity.shape[0]))
     # pyfits.PrimaryHDU(data=integrated_intensity).writeto()
     numpy.savetxt("1d_%s.cat" % (fb[:-5]), integrated_intensity)
 
@@ -61,6 +62,9 @@ def find_slit_profile(hdulist, filename, source_region=[1400,2600]):
 
     """
 
+    logger = logging.getLogger("FindSlitProfile")
+    logger.debug("Extracting slit profile for %s" % (filename))
+
     try:
         _,fb = os.path.split(filename)
     except:
@@ -79,7 +83,7 @@ def find_slit_profile(hdulist, filename, source_region=[1400,2600]):
     # Get integrated slit profile
     #
     integrated_intensity = bottleneck.nansum(hdulist['SCI'].data.astype(numpy.float32), axis=1)
-    logger.info("Integrated intensity: covers %d pixels along slit" % (integrated_intensity.shape[0]))
+    logger.debug("Integrated intensity: covers %d pixels along slit" % (integrated_intensity.shape[0]))
     # pyfits.PrimaryHDU(data=integrated_intensity).writeto()
     numpy.savetxt("1d_%s.cat" % (fb[:-5]), integrated_intensity)
 
@@ -99,12 +103,12 @@ def find_slit_profile(hdulist, filename, source_region=[1400,2600]):
     numpy.savetxt("1d_bg_%s.cat.start" % (fb[:-5]), likely_background_profile)
 
     for i in range(5):
-        logger.info("Iteration %d: %d valid pixels considered BG" % (i+1, numpy.sum(background)))
+        logger.debug("Iteration %d: %d valid pixels considered BG" % (i+1, numpy.sum(background)))
 
         # compute median of all pixels considered background
         med = bottleneck.nanmedian(integrated_intensity[background])
         std = bottleneck.nanstd(integrated_intensity[background])
-        logger.info("Med/Std: %f   %f" % (med, std))
+        logger.debug("Med/Std: %f   %f" % (med, std))
         # Now set new bright and faint limits
         bright_lim, faint_lim = med+3*std, med-3*std
 
@@ -136,28 +140,28 @@ def find_slit_profile(hdulist, filename, source_region=[1400,2600]):
     #
     # Use 50 basepoints for the fitting polynomial
     x = numpy.arange(filtered_bg.shape[0])
-    print 400/biny, 3600/biny, 100/biny
+    # print 400/biny, 3600/biny, 100/biny
 
     if (not source_region == None):
-        print "X:", filtered_bg.shape
+        # print "X:", filtered_bg.shape
         do_not_fit = ((x<1400/biny) | (x>2600/biny)) & skymask
 
         t = numpy.linspace(numpy.min(x[do_not_fit])+1, numpy.max(x[do_not_fit])-1, 50) #100/biny)
         avoidance = (t>source_region[0]/biny) & (t<source_region[1]/biny)
         t = t[~avoidance]
-        print t
+        # print t
     else:
         do_not_fit = skymask
         t = numpy.linspace(numpy.min(x)+1, numpy.max(x)-1, 50)
         
-    print "Using spline fitting base points\n",t
+    # print "Using spline fitting base points\n",t
 
     w = numpy.ones(filtered_bg.shape[0])
     w[~skymask] = 0
     numpy.savetxt("slitprofile.weights", w)
     numpy.savetxt("slitprofile.do_not_fit", do_not_fit)
     
-    print "xrange:",numpy.min(x[do_not_fit]), numpy.max(x[do_not_fit])
+    logger.debug("xrange: %d ... %d" % (numpy.min(x[do_not_fit]), numpy.max(x[do_not_fit])))
     numpy.savetxt("1d_bg_%s.cat.basepoints" % (fb[:-5]), t, "%.2f")
     numpy.savetxt("1d_bg_%s.cat.wt" % (fb[:-5]), w)
     # lsq_spline = scipy.interpolate.LSQUnivariateSpline(
@@ -177,13 +181,14 @@ def find_slit_profile(hdulist, filename, source_region=[1400,2600]):
     # Now normalize this line profile so we can use it to flatten out the slit image
     #
     avg_flux = bottleneck.nanmean(filtered_bg)
-    print "average slit across slit profile:", avg_flux
+    logger.debug("average slit across slit profile: %.3f" % (avg_flux))
 
     #slit_flattening = filtered_bg / avg_flux
     slit_flattening = lsq_spline(x) / avg_flux
     # Fill in gaps with ones
     slit_flattening[numpy.isnan(slit_flattening)] = 1.0
 
+    logger.debug("done!")
     return slit_flattening.reshape((-1,1)), skymask, filtered_bg.reshape((-1,1))/avg_flux
 
 
