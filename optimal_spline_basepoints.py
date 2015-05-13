@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 
 import os, sys, pyfits, numpy
-import scipy, scipy.interpolate
+import scipy, scipy.interpolate, scipy.spatial
+
 
 import pysalt.mp_logging
 import logging
+import bottleneck
 
 
     #     #
@@ -156,12 +158,17 @@ if __name__ == "__main__":
     good_point = (allskies[:,0] > 0)
     print good_point.shape
     print good_point
+
+    avg_sample_width = (numpy.max(k_wl) - numpy.min(k_wl)) / k_wl.shape[0]
+
     for iteration in range(3):
-        
+
+        good_data = allskies[good_point]
+
         # compute spline
         spline_iter = scipy.interpolate.LSQUnivariateSpline(
-            x=allskies[good_point,0],#[good_point], 
-            y=allskies[good_point,1],#[good_point], 
+            x=allskies[:,0],#[good_point], 
+            y=allskies[:,1],#[good_point], 
             t=k_wl,
             w=None, # no weights (for now)
             bbox=[wl_min, wl_max], 
@@ -175,7 +182,7 @@ if __name__ == "__main__":
         
         
         # compute spline fit for each wavelength data point
-        dflux = allskies[:,1] - spline_iter(allskies[:,0])
+        dflux = good_data[:,1] - spline_iter(good_data[:,0])
         print dflux
 
         #
@@ -184,17 +191,66 @@ if __name__ == "__main__":
         #           or not, and NOT the uncertainty in a given pixel
         #
 
-        # and check how significant this deviation is
-        dsigma = dflux / allskies[:,2]
-        print dsigma
+        # Create a KD-tree with all data points
+        wl_tree = scipy.spatial.cKDTree(good_data[:,0].reshape((-1,1)))
+
+        # Now search this tree for points near each of the spline base points
+        d, i = wl_tree.query(k_wl.reshape((-1,1)),
+                             k=100, # use 100 neighbors
+                             distance_upper_bound=avg_sample_width)
+        
+        # make sure to flag outliers
+        bad = (i >= dflux.shape[0])
+        i[bad] = 0
+
+        # Now we have all indices of a bunch of nearby datapoints, so we can 
+        # extract how far off each of the data points is
+        delta_flux_2d = dflux[i]
+        delta_flux_2d[bad] = numpy.NaN
+        print "dflux_2d = ", delta_flux_2d.shape
+
+        # With this we can estimate the scatter around each spline fit basepoint
+        var = bottleneck.nanstd(delta_flux_2d, axis=1)
+        print "variance:", var.shape
+        numpy.savetxt("fit_variance.iter_%d" % (iteration+1),
+                      numpy.append(k_wl.reshape((-1,1)),
+                                   var.reshape((-1,1)), axis=1))
+        
+        #
+        # Now interpolate this scatter linearly to the position of each 
+        # datapoint in the original dataset. That way we can easily decide, 
+        # for each individual pixel, if that pixel is to be considered an 
+        # outlier or not.
+        #
+        # Note: Need to consider ALL pixels here, not just the good ones 
+        #       selected above
+        #
+        std_interpol = scipy.interpolate.interp1d(
+            x = k_wl, 
+            y = var,
+            kind = 'linear',
+            #assume_sorted=True
+            )
+        var_at_pixel = std_interpol(good_data[:,0])
+
+        # Now mark all pixels exceeding the noise threshold as outliers
+        not_outlier = numpy.fabs(dflux) < var_at_pixel
+
+        good_data = good_data[not_outlier]
+
+
+        # # and check how significant this deviation is
+        # dsigma = dflux / allskies[:,2]
+        # #print dsigma
 
         
-        # now exclude all data points that deviate by more than 3 sigma
-        good_point = numpy.fabs(dsigma) < 3
-        print good_point.shape
-        print good_point
+        # # now exclude all data points that deviate by more than 3 sigma
+        # good_point = numpy.fabs(dsigma) < 3
+        # #print good_point.shape
+        # #print good_point
 
-        logger.info("Done with iteration %d (%d pixels left)" % (iteration+1, numpy.sum(good_point)))
+        logger.info("Done with iteration %d (%d pixels left)" % (iteration+1, good_data.shape[0]))
+#numpy.sum(good_point)))
 
 
     #
