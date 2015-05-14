@@ -23,6 +23,21 @@ import bottleneck
     #     pysalt.mp_logging.log_exception()
 
 
+
+def satisfy_schoenberg_whitney(data, basepoints, k=3):
+
+    delete = numpy.isnan(basepoints)
+    for idx in range(basepoints.shape[0]-1):
+        # count how many data points are between this and the next basepoint
+        in_range = (data > basepoints[idx]) & (data < basepoints[idx+1])
+        count = numpy.sum(in_range)
+        if (count < k):
+            # delete this basepoint
+            delete[idx] = True
+
+    return basepoints[~delete]
+
+    
 if __name__ == "__main__":
 
 
@@ -34,7 +49,7 @@ if __name__ == "__main__":
     obj_hdulist = pyfits.open(obj_fitsfile)
 
     logger.info("Loading all data from FITS")
-    obj_data = obj_hdulist['SCIRAW'].data
+    obj_data = obj_hdulist['SCI.RAW'].data
     obj_wl   = obj_hdulist['WAVELENGTH'].data
     obj_rms  = obj_hdulist['VAR'].data
     obj_bpm  = obj_hdulist['BPM'].data.flatten()
@@ -100,7 +115,7 @@ if __name__ == "__main__":
         )
     
     # now create the raw basepoints in cumulative flux space
-    N_points = 1000
+    N_points = 6000
     k_cumflux = numpy.linspace(allskies_cumulative[0],
                                allskies_cumulative[-1],
                                N_points+2)[1:-1]
@@ -125,13 +140,17 @@ if __name__ == "__main__":
     wl_min, wl_max = numpy.min(allskies[:,0]), numpy.max(allskies[:,0])
 
     logger.info("Computing spline using original/simple sampling")
-    k_orig = numpy.linspace(wl_min, wl_max, N_points+2)[1:-1]
+    wl_range = wl_max - wl_min
+    #k_min, kmax = 
+    #k_orig = numpy.linspace(wl_min+0.01*wl_range, wl_max-0.01*wl_range, N_points+2)[5:-5]
+    k_orig_ = numpy.linspace(wl_min, wl_max, N_points+2)[1:-1]
+    k_orig = satisfy_schoenberg_whitney(allskies[:,0], k_orig_, k=3)
     spline_orig = scipy.interpolate.LSQUnivariateSpline(
         x=allskies[:,0], 
         y=allskies[:,1], 
         t=k_orig,
         w=None, # no weights (for now)
-        bbox=[wl_min, wl_max], 
+        #bbox=None, #[wl_min, wl_max], 
         k=3, # use a cubic spline fit
         )
     numpy.savetxt("spline_orig", numpy.append(k_orig.reshape((-1,1)),
@@ -140,10 +159,11 @@ if __name__ == "__main__":
                   )
 
     logger.info("Computing spline using optimized sampling")
+    k_opt_good = satisfy_schoenberg_whitney(allskies[:,0], k_wl, k=3)
     spline_opt = scipy.interpolate.LSQUnivariateSpline(
         x=allskies[:,0], 
         y=allskies[:,1], 
-        t=k_wl,
+        t=k_opt_good, #k_wl,
         w=None, # no weights (for now)
         bbox=[wl_min, wl_max], 
         k=3, # use a cubic spline fit
@@ -161,22 +181,25 @@ if __name__ == "__main__":
 
     avg_sample_width = (numpy.max(k_wl) - numpy.min(k_wl)) / k_wl.shape[0]
 
+    good_data = allskies[good_point]
+
+    spline_iter = None
     for iteration in range(3):
 
-        good_data = allskies[good_point]
-
         # compute spline
+        k_iter_good = satisfy_schoenberg_whitney(good_data[:,0], k_wl, k=3)
+
         spline_iter = scipy.interpolate.LSQUnivariateSpline(
-            x=allskies[:,0],#[good_point], 
-            y=allskies[:,1],#[good_point], 
-            t=k_wl,
+            x=good_data[:,0], #allskies[:,0],#[good_point], 
+            y=good_data[:,1], #allskies[:,1],#[good_point], 
+            t=k_iter_good, #k_wl,
             w=None, # no weights (for now)
             bbox=[wl_min, wl_max], 
             k=3, # use a cubic spline fit
             )
         numpy.savetxt("spline_opt.iter%d" % (iteration+1), 
                       numpy.append(k_wl.reshape((-1,1)),
-                                   spline_opt(k_wl).reshape((-1,1)),
+                                   spline_iter(k_wl).reshape((-1,1)),
                                    axis=1)
                   )
         
@@ -229,14 +252,23 @@ if __name__ == "__main__":
             x = k_wl, 
             y = var,
             kind = 'linear',
+            fill_value=1e3,
+            bounds_error=False,
             #assume_sorted=True
             )
         var_at_pixel = std_interpol(good_data[:,0])
+
+        numpy.savetxt("pixelvar.%d" % (iteration+1), 
+                      numpy.append(good_data[:,0].reshape((-1,1)),
+                                   var_at_pixel.reshape((-1,1)), axis=1))
 
         # Now mark all pixels exceeding the noise threshold as outliers
         not_outlier = numpy.fabs(dflux) < var_at_pixel
 
         good_data = good_data[not_outlier]
+        numpy.savetxt("good_after.%d" % (iteration+1),
+                      numpy.append(good_data[:,0].reshape((-1,1)),
+                                   dflux[not_outlier].reshape((-1,1)), axis=1))
 
 
         # # and check how significant this deviation is
@@ -265,5 +297,18 @@ if __name__ == "__main__":
     comp[:, allskies.shape[1]+0] = fit_orig[:]
     comp[:, allskies.shape[1]+1] = fit_opt[:]
     numpy.savetxt("allskies.comp", comp)
+
+
+    #
+    # Now in a final step, compute the 2-D sky spectrum, subtract, and save results
+    #
+    if (not spline_iter == None):
+        sky2d = spline_iter(obj_wl.ravel()).reshape(obj_wl.shape)
+        skysub = obj_data - sky2d
+        ss_hdu = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
+                                 data=skysub)
+        ss_hdu.name = "SKYSUB.OPT"
+        obj_hdulist.append(ss_hdu)
+        obj_hdulist.writeto("optimized.fits", clobber=True)
 
     pysalt.mp_logging.shutdown_logging(logger_setup)
