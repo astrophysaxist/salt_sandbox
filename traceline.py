@@ -32,6 +32,8 @@ import pickle
 from helpers import *
 # from rk_specred import find_slit_profile
 
+createdebugfiles = True
+
 
 def trace_arc(data,
               start,
@@ -197,6 +199,85 @@ def trace_arc(data,
 
 
 
+
+def subpixel_centroid_trace(data, tracedata, width=5, dumpfile=None):
+
+    logger = logging.getLogger("SubpixelCentroid")
+
+    #
+    # Grow the data by <width> pixels on either side to avoid problems with 
+    # cutouts close to the edge
+    #
+    grow_data = numpy.empty((data.shape[0], data.shape[1]+2*width))
+    # insert the image data, setting boundaries to NaN
+    grow_data[:, :width] = numpy.NaN
+    grow_data[:, -width:] = numpy.NaN
+    grow_data[:, width:-width] = data[:,:]
+    
+    logger.debug("size was: %4d x %4d, now it is %4d x %4d" % (
+        data.shape[1], data.shape[0], grow_data.shape[1], grow_data.shape[0]))
+
+    #
+    # Now extract only the lines for which we have data
+    #
+    select_y = tracedata[:,0].astype(numpy.int)
+    selected_y = grow_data[select_y]
+
+    #
+    # Get indices of each pixel in the y-selected, grown data buffer
+    # We'll use them to select and cutout the rough image
+    #
+    iy, ix = numpy.indices(selected_y.shape)
+    # shift the x indiced by width to account for the NaN pixel filling
+    ix -= width
+
+    #
+    # now create a boolean selection mask including only pixels in the vicinity 
+    # of the traced arc
+    #
+    select_x = tracedata[:,1].reshape((-1,1)).astype(numpy.int)
+    part_of_line = (ix >= select_x-width) & (ix <= select_x+width)
+
+    #
+    # And finally extract the line, with centers roughly aligned
+    #
+    data_sel = grow_data[select_y][part_of_line].reshape((-1, 2*width+1))
+    line_positions = ix[part_of_line].reshape((-1, 2*width+1))
+
+    #
+    # Do some very simple background subtraction, by taking the average flux 
+    # between the left and right most pixels in our little window to be the 
+    # average background, then interpolate linearly between both values to find
+    # the background across the slit
+    #
+    bg_offset = data_sel[:,0] # value at left edge
+    bg_slope = (data_sel[:,-1] - data_sel[:,0]) / (data_sel.shape[1]-1)
+    idx_x = numpy.arange(data_sel.shape[1], dtype=numpy.float).reshape((1,-1))
+    background = idx_x * bg_slope.reshape((-1,1)) + bg_offset.reshape((-1,1))
+    #print "background shape:", background.shape, data_sel.shape
+
+    # subtract off the background to avoid skewing the line center position in
+    # the direction of the (potential) background slope
+    data_sel -= background
+
+    #
+    # With that info, we can now create the flux-weighted center position
+    #
+    weighted_center_x = bottleneck.nansum(data_sel*line_positions, axis=1)/bottleneck.nansum(data_sel, axis=1)
+    #print weighted_center_x.shape
+
+    if (not dumpfile == None and createdebugfiles):
+        # prepare a fits file with the rough-rectified line, with column numbers
+        hdulist = pyfits.HDUList([
+            pyfits.PrimaryHDU(),
+            pyfits.ImageHDU(data=data_sel),
+            pyfits.ImageHDU(data=line_positions)])
+        hdulist.writeto(dumpfile, clobber=True)
+
+    return weighted_center_x
+
+
+    
 def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None,
                       fine_centroiding=False,
                       centroiding_width=5):
@@ -212,13 +293,13 @@ def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None,
     #data_around_line = fitsdata[arcpos_x-100:arcpos_x+100,:]
     #pyfits.PrimaryHDU(data=data_around_line.T).writeto("arcregion.fits", clobber=True)
 
-    if (not ds9_region_file == None):
-        ds9_region = open(ds9_region_file, "a")
-        print >>ds9_region, """\
-# Region file format: DS9 version 4.1
-global color=black dashlist=8 3 width=1 font="helvetica 10 normal roman" select=1 highlite=1 dash=0 fixed=0 edit=1 move=1 delete=1 include=1 source=1
-image\
-"""
+#     if (not ds9_region_file == None):
+#         ds9_region = open(ds9_region_file, "a")
+#         print >>ds9_region, """\
+# # Region file format: DS9 version 4.1
+# global color=black dashlist=8 3 width=1 font="helvetica 10 normal roman" select=1 highlite=1 dash=0 fixed=0 edit=1 move=1 delete=1 include=1 source=1
+# image\
+# """
 
     # Now, going downwards, follow the line
     all_row_data = None
@@ -234,12 +315,12 @@ image\
         valid = numpy.isfinite(lt[:,1])
         lt = lt[valid]
 
-        if (not ds9_region_file == None): 
-            print >>ds9_region, '# text(%d,%d) text={%d}' % (lt[0,1]+1, lt[0,0]+1, line_idx)
+        # if (not ds9_region_file == None): 
+        #     print >>ds9_region, '# text(%d,%d) text={%d}' % (lt[0,1]+1, lt[0,0]+1, line_idx)
 
-            for idx in range(1, lt.shape[0]):
-                # print >>ds9_region, 'point(%d,%d)' % (lt[idx,1], lt[idx,0])
-                print >>ds9_region, 'line(%d,%d,  %d,%d' % (lt[idx,1]+1, lt[idx,0]+1, lt[idx-1,1]+1, lt[idx-1,0]+1)
+        #     for idx in range(1, lt.shape[0]):
+        #         # print >>ds9_region, 'point(%d,%d)' % (lt[idx,1], lt[idx,0])
+        #         print >>ds9_region, 'line(%d,%d,  %d,%d' % (lt[idx,1]+1, lt[idx,0]+1, lt[idx-1,1]+1, lt[idx-1,0]+1)
 
         all_row_data = lt if all_row_data == None else numpy.append(all_row_data, lt, axis=0)
 
@@ -247,31 +328,67 @@ image\
     si = numpy.argsort(all_row_data[:,0])
     all_row_data = all_row_data[si]
 
-    with open("linetrace_idx.%d" % (line_idx), "w") as lt_file:
-        numpy.savetxt(lt_file, all_row_data)
-        print >>lt_file, "\n\n\n\n\n"
+    # with open("linetrace_idx.%d" % (line_idx), "w") as lt_file:
+    #     numpy.savetxt(lt_file, all_row_data)
+    #     print >>lt_file, "\n\n\n\n\n"
 
-    if (not ds9_region_file == None): ds9_region.close()
+    # if (not ds9_region_file == None): ds9_region.close()
 
     if (fine_centroiding):
-        logger.info("Done with tracing, starting fine centroiding")
-        print all_row_data.shape
+        logger.debug("Done with tracing, starting fine centroiding")
+        #print all_row_data.shape
 
         # cutout regions close (+/- width pixels) to line
-        traced_y_pos = all_row_data[:,0].astype(numpy.int)
-        traced_x_pos = all_row_data[:,1].astype(numpy.int)
-        x1 = traced_x_pos - centroiding_width
-        x2 = traced_x_pos + centroiding_width+1
-        print x1
-        line_cutout = fitsdata[traced_y_pos, x1:x2]
-        print line_cutout.shape
+        # traced_y_pos = all_row_data[:,0].astype(numpy.int)
+        # traced_x_pos = all_row_data[:,1].astype(numpy.int)
+        # x1 = traced_x_pos - centroiding_width
+        # x2 = traced_x_pos + centroiding_width+1
+        # print x1
+        # line_cutout = fitsdata[traced_y_pos, x1:x2]
+        # print line_cutout.shape
 
-        time.sleep(0.5)
+        fine_pos = subpixel_centroid_trace(data=fitsdata.T, tracedata=all_row_data, width=10, 
+                                           dumpfile="linetrace_%d.fits" % (line_idx))
+        #pyfits.PrimaryHDU(data=rectified).writeto("linetrace_%d.fits" % (line_idx), clobber=True)
+        
+    else:
+        fine_pos = all_row_data[:,1]
+
+    if (createdebugfiles):
+        with open("linetrace_idx.%d" % (line_idx), "w") as lt_file:
+            logger.debug("Writing linetrace to %s" % ("linetrace_idx.%d" % (line_idx)))
+            numpy.savetxt(lt_file, all_row_data)
+            print >>lt_file, "\n\n\n\n\n"
+
+            # Now replace the coarse x-position with the new, fine positions
+            numpy.savetxt(lt_file, all_row_data)
+    else:
+        all_row_data[:,1] = fine_pos[:]
+
+    # make sure all trace positions are real positions, and exclude potential problems
+    good_pos = numpy.isfinite(all_row_data[:,0]) & numpy.isfinite(all_row_data[:,1])
+    all_row_data = all_row_data[good_pos]
+
+
+    if (not ds9_region_file == None):
+        with open(ds9_region_file, "a") as ds9_region:
+            print >>ds9_region, """\
+# Region file format: DS9 version 4.1
+global color=black dashlist=8 3 width=1 font="helvetica 10 normal roman" select=1 highlite=1 dash=0 fixed=0 edit=1 move=1 delete=1 include=1 source=1
+image\
+"""
+            for idx in range(1, all_row_data.shape[0]):
+                print >>ds9_region, 'line(%.0f,%d,  %.0f,%d) # line=0 0' % (
+                    all_row_data[idx,1]+1, all_row_data[idx,0]+1, 
+                    all_row_data[idx-1,1]+1, all_row_data[idx-1,0]+1)
+                
+            ds9_region.close()
 
 
     #
     # Assemble the return data
     #
+
 
     # compute the wavelength of this line
     # print 
@@ -369,9 +486,8 @@ def compute_2d_wavelength_solution(arc_filename,
 
     #print wls_data
 
-    logger.info("Continuing with tracing lines!\n")
-    time.sleep(0.1)
-
+    logger.info("Continuing with tracing lines!")
+    
     # Now pick the strongest line from the results
     arclines = wls_data['linelist_arc']
     max_s2n = numpy.argmax(arclines[:,wlcal.lineinfo_colidx['S2N']])
@@ -385,7 +501,7 @@ def compute_2d_wavelength_solution(arc_filename,
     #
     logger.info("Creating slit profile for normalization")
     slitprofile_fit, mask, slitprofile = find_slit_profile(hdulist, arc_filename, source_region=None)
-    print "SLITPROFILE:", slitprofile.shape, hdulist['SCI'].data.shape
+    #print "SLITPROFILE:", slitprofile.shape, hdulist['SCI'].data.shape
     if (debug): numpy.savetxt("slitprofile.dump", slitprofile)
 
     #
@@ -448,7 +564,7 @@ def compute_2d_wavelength_solution(arc_filename,
         linetrace = trace_single_line(fitsdata_gf, wls_data, i,
                                       ds9_region_file=arc_region_file,
                                       fine_centroiding=True,
-                                      centroiding_width=5)
+                                      centroiding_width=10)
         # linetrace = trace_single_line(fitsdata_gf, wls_data, sort_sn[i],
         #                    ds9_region_file=arc_region_file)
         # print linetrace.shape
@@ -565,6 +681,7 @@ if __name__ == "__main__":
         arc_filename=filename, 
         n_lines_to_trace=n_lines, 
         fit_order=[3,2],
+#        fit_order=[4,4],
         output_wavelength_image="wl+image.fits",
         debug=True,
         arc_region_file="ds9_arc.reg")
