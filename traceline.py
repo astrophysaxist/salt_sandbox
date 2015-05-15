@@ -197,7 +197,9 @@ def trace_arc(data,
 
 
 
-def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None):
+def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None,
+                      fine_centroiding=False,
+                      centroiding_width=5):
 
     logger = logging.getLogger("TraceSlgLine")
 
@@ -250,6 +252,22 @@ image\
         print >>lt_file, "\n\n\n\n\n"
 
     if (not ds9_region_file == None): ds9_region.close()
+
+    if (fine_centroiding):
+        logger.info("Done with tracing, starting fine centroiding")
+        print all_row_data.shape
+
+        # cutout regions close (+/- width pixels) to line
+        traced_y_pos = all_row_data[:,0].astype(numpy.int)
+        traced_x_pos = all_row_data[:,1].astype(numpy.int)
+        x1 = traced_x_pos - centroiding_width
+        x2 = traced_x_pos + centroiding_width+1
+        print x1
+        line_cutout = fitsdata[traced_y_pos, x1:x2]
+        print line_cutout.shape
+
+        time.sleep(0.5)
+
 
     #
     # Assemble the return data
@@ -428,7 +446,9 @@ def compute_2d_wavelength_solution(arc_filename,
 
     for i in trace_line_indices: #range(n_lines_to_trace):
         linetrace = trace_single_line(fitsdata_gf, wls_data, i,
-                           ds9_region_file=arc_region_file)
+                                      ds9_region_file=arc_region_file,
+                                      fine_centroiding=True,
+                                      centroiding_width=5)
         # linetrace = trace_single_line(fitsdata_gf, wls_data, sort_sn[i],
         #                    ds9_region_file=arc_region_file)
         # print linetrace.shape
