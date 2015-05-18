@@ -9,21 +9,6 @@ import logging
 import bottleneck
 
 
-    #     #
-    #     # For debugging, compute the spline fit at all basepoints and dump to txt file
-    #     #
-    #     ss = numpy.append(basepoints.reshape((-1,1)),
-    #                       sky_spectrum_spline(basepoints).reshape((-1,1)),
-    #                       axis=1)
-    #     numpy.savetxt("skyspectrum.knots", sky_spectrum_spline.get_knots())
-    #     numpy.savetxt("skyspectrum.coeffs", sky_spectrum_spline.get_coeffs())
-    #     numpy.savetxt("skyspectrum.txt", ss)
-    # except:
-    #     logger.critical("Error with spline-fitting the sky-spectrum")
-    #     pysalt.mp_logging.log_exception()
-
-
-
 def satisfy_schoenberg_whitney(data, basepoints, k=3):
 
     delete = numpy.isnan(basepoints)
@@ -141,8 +126,6 @@ if __name__ == "__main__":
 
     logger.info("Computing spline using original/simple sampling")
     wl_range = wl_max - wl_min
-    #k_min, kmax = 
-    #k_orig = numpy.linspace(wl_min+0.01*wl_range, wl_max-0.01*wl_range, N_points+2)[5:-5]
     k_orig_ = numpy.linspace(wl_min, wl_max, N_points+2)[1:-1]
     k_orig = satisfy_schoenberg_whitney(allskies[:,0], k_orig_, k=3)
     spline_orig = scipy.interpolate.LSQUnivariateSpline(
@@ -202,7 +185,6 @@ if __name__ == "__main__":
                                    spline_iter(k_wl).reshape((-1,1)),
                                    axis=1)
                   )
-        
         
         # compute spline fit for each wavelength data point
         dflux = good_data[:,1] - spline_iter(good_data[:,0])
@@ -270,19 +252,7 @@ if __name__ == "__main__":
                       numpy.append(good_data[:,0].reshape((-1,1)),
                                    dflux[not_outlier].reshape((-1,1)), axis=1))
 
-
-        # # and check how significant this deviation is
-        # dsigma = dflux / allskies[:,2]
-        # #print dsigma
-
-        
-        # # now exclude all data points that deviate by more than 3 sigma
-        # good_point = numpy.fabs(dsigma) < 3
-        # #print good_point.shape
-        # #print good_point
-
         logger.info("Done with iteration %d (%d pixels left)" % (iteration+1, good_data.shape[0]))
-#numpy.sum(good_point)))
 
 
     #
