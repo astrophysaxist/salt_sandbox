@@ -23,15 +23,13 @@ def satisfy_schoenberg_whitney(data, basepoints, k=3):
     return basepoints[~delete]
 
     
-if __name__ == "__main__":
 
+def optimal_sky_subtraction(obj_hdulist, 
+                            sky_regions=None,
+                            slitprofile=None,
+                            N_points = 6000):
 
-    logger_setup = pysalt.mp_logging.setup_logging()
     logger = logging.getLogger("OptSplineKs")
-
-
-    obj_fitsfile = sys.argv[1]
-    obj_hdulist = pyfits.open(obj_fitsfile)
 
     logger.info("Loading all data from FITS")
     obj_data = obj_hdulist['SCI.RAW'].data
@@ -39,19 +37,43 @@ if __name__ == "__main__":
     obj_rms  = obj_hdulist['VAR'].data
     obj_bpm  = obj_hdulist['BPM'].data.flatten()
 
+    try:
+        obj_spatial = obj_hdulist['SPATIAL'].data
+    except:
+        logger.warning("Could not find spatial map, using plain x/y coordinates instead")
+        obj_spatial, _ = numpy.indices(obj_data.shape)
+
     # now merge all data frames into a single 3-d numpy array
-    obj_cube = numpy.empty((obj_data.shape[0], obj_data.shape[1], 3))
+    obj_cube = numpy.empty((obj_data.shape[0], obj_data.shape[1], 4))
     obj_cube[:,:,0] = obj_wl[:,:]
     obj_cube[:,:,1] = obj_data[:,:]
     obj_cube[:,:,2] = obj_rms[:,:]
+    obj_cube[:,:,3] = obj_spatial[:,:]
+    
 
-    obj_cube = obj_cube.reshape((-1, 3))
+    obj_cube = obj_cube.reshape((-1, obj_cube.shape[2]))
 
     # Now exclude all pixels marked as bad
     obj_cube = obj_cube[obj_bpm == 0]
 
     logger.info("%7d pixels left after eliminating bad pixels!" % (obj_cube.shape[0]))
 
+    #
+    # Now also exclude all points that are marked as non-sky regions 
+    # (e.g. including source regions)
+    #
+    if (not type(sky_regions) == type(None) and
+        type(sky_regions) == numpy.ndarray):
+        
+        logger.info("Selecting sky-pixels from user-defined regions")
+        is_sky = numpy.ones((obj_cube.shape[0]), dtype=numpy.bool)
+        for idx, sky_region in enumerate(sky_regions):
+            in_region = (obj_cube[:,3] > sky_region[0]) & (obj_cube[:,3] < sky_region[1])
+            is_sky[in_region] = True
+
+        obj_cube = obj_cube[is_sky]
+
+        
     allskies = obj_cube[::5]
 
     
@@ -100,7 +122,6 @@ if __name__ == "__main__":
         )
     
     # now create the raw basepoints in cumulative flux space
-    N_points = 6000
     k_cumflux = numpy.linspace(allskies_cumulative[0],
                                allskies_cumulative[-1],
                                N_points+2)[1:-1]
@@ -279,6 +300,32 @@ if __name__ == "__main__":
                                  data=skysub)
         ss_hdu.name = "SKYSUB.OPT"
         obj_hdulist.append(ss_hdu)
-        obj_hdulist.writeto("optimized.fits", clobber=True)
+
+
+    return
+
+
+
+
+if __name__ == "__main__":
+
+
+    logger_setup = pysalt.mp_logging.setup_logging()
+
+
+    obj_fitsfile = sys.argv[1]
+    obj_hdulist = pyfits.open(obj_fitsfile)
+
+    sky_regions = None
+    if (len(sys.argv) > 2):
+        user_sky = sys.argv[2]
+        sky_regions = numpy.array([x.split(":") for x in user_sky.split(",")]).astype(numpy.int)
+
+
+    optimal_sky_subtraction(obj_hdulist, 
+                            sky_regions=sky_regions,
+                            N_points=6000)
+
+    obj_hdulist.writeto(obj_fitsfile[:-5]+".optimized.fits", clobber=True)
 
     pysalt.mp_logging.shutdown_logging(logger_setup)
