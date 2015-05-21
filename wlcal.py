@@ -156,23 +156,48 @@ def extract_arc_spectrum(hdulist, line=None, avg_width=20):
     return avg_spec
 
 
+
+
 mm_to_A = 10e6
 
-def find_list_of_lines(spec, avg_width):
+def find_list_of_lines(spec, readnoise=2, avg_width=1):
+
+    """
+
+    Find a list of spectral emission lines for a given 1-D spectrum
+
+    Parameters:
+    -----------
+
+    spec : numpy.ndarray, 1-d
+
+        Input spectrum; has to be a 1-D spectrum, i.e. spec.shape needs to 
+        be (N,), not (N,1).
+
+    readnoise : float (default: 2.0)
+
+        Readnoise of the data; necessary for properly estimating the noise in 
+        the continnum and subsequently the signal-to-noise ratio of each 
+        detection.
+
+    avg_width : int
+
+        If the input spectrum is a combination of multiple detector rows, this 
+        needs to specified here.
+
+    Returns
+    -------
+
+    linecat : numpy.array
+
+    """
 
     logger = logging.getLogger("FindLineList")
 
     max_intensity = numpy.nanmax(spec)
-    x_pixels = numpy.arange(spec.shape[0]) # FITS starts counting pixels at 1
     logger.debug("Found max intensity %.1f in %4d pixels" % (max_intensity, spec.shape[0]))
-    numpy.savetxt("fll_spec.in", spec)
-    
-    # blockaverage spectrum
-    logger.debug("Block-averaging line spectrum to minimize noise")
-    w=2
-    blkavg = numpy.array([
-        numpy.average(spec[i-w:i+w]) for i in range(spec.shape[0])])
-    numpy.savetxt("blkavg_spec.dat", blkavg)
+
+    x_pixels = numpy.arange(spec.shape[0]) # FITS starts counting pixels at 1
 
     #
     # median-filter spectrum to get continuum
@@ -202,38 +227,35 @@ def find_list_of_lines(spec, avg_width):
     # Definition of a peak: A value higher than the two neighboring values
     #
     logger.debug("Starting to search for lines")
-    # print blkavg.shape
 
-    numpy.savetxt("fll_blkavg_for_peaks", blkavg)
-    peak = numpy.empty(blkavg.shape, dtype=numpy.bool)
+    peak = numpy.empty(spec.shape, dtype=numpy.bool)
     peak[:] = False
-    peak[1:-1] = (blkavg[1:-1] > blkavg[:-2]) & (blkavg[1:-1] > blkavg[2:])
+    peak[1:-1] = (spec[1:-1] > spec[:-2]) & (spec[1:-1] > spec[2:])
     # peak = numpy.array(
-    #     [(blkavg[i] if blkavg[i]>blkavg[i-1] and blkavg[i]>blkavg[i+1] else 0)
-    #      for i in range(1,blkavg.shape[0]-1)])
+    #     [(spec[i] if spec[i]>spec[i-1] and spec[i]>spec[i+1] else 0)
+    #      for i in range(1,spec.shape[0]-1)])
     # peak = numpy.array(
-    #     [(True if blkavg[i]>blkavg[i-1] and blkavg[i]>blkavg[i+1] else False)
-    #      for i in range(blkavg.shape[0])])
+    #     [(True if spec[i]>spec[i-1] and spec[i]>spec[i+1] else False)
+    #      for i in range(spec.shape[0])])
     # print peak
     
-    peak_values = numpy.array(blkavg)
+    peak_values = numpy.array(spec)
     peak_values[~peak] = -1
     numpy.savetxt("peaks_values", peak_values)
     
     numpy.savetxt("peaks_yesno", peak)
     numpy.savetxt("wl_peaks", numpy.append(
 #        x_pixels[peak].reshape((-1,1)), spec[peak].reshape((-1,1)), axis=1))
-        x_pixels[peak].reshape((-1,1)), blkavg[peak].reshape((-1,1)), axis=1))
+        x_pixels[peak].reshape((-1,1)), spec[peak].reshape((-1,1)), axis=1))
     
     # Now reject all peaks that are not significantly over the estimated background noise
-    readnoise = 2. # raw data: ron = 3.3, gain = 1.6 --> RON=2 ADU
     continuum_noise = numpy.sqrt(continuum*readnoise*2*avg_width) / (2*avg_width)
     numpy.savetxt("continuum_noise", continuum_noise)
 
     # require at least 3 sigma over background noise
     real_peak = peak & ((spec-continuum) > 3*continuum_noise) #& (spec > continuum+100)
     numpy.savetxt("wl_real_peaks", numpy.append(
-        x_pixels[real_peak].reshape((-1,1)), blkavg[real_peak].reshape((-1,1)), axis=1))
+        x_pixels[real_peak].reshape((-1,1)), spec[real_peak].reshape((-1,1)), axis=1))
 
     # compute full S/N for each pixels
     s2n = (spec - continuum) / (numpy.sqrt(spec*readnoise*2*avg_width) / (2*avg_width))
@@ -244,11 +266,13 @@ def find_list_of_lines(spec, avg_width):
     # Combine all relevant data generated above for later use
     combined = numpy.empty((numpy.sum(real_peak), len(lineinfo_cols)))
     combined[:,0] = x_pixels[real_peak]
-    combined[:,1] = blkavg[real_peak]
+    combined[:,1] = spec[real_peak]
     combined[:,2] = continuum[real_peak]
     combined[:,3] = continuum_noise[real_peak]
     combined[:,4] = s2n[real_peak]
     combined[:,5] = x_pixels[real_peak]
+
+    # numpy.savetxt("detectlines.debug", combined)
 
     return combined
 
