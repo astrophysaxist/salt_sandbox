@@ -6,6 +6,9 @@ from scipy.ndimage.filters import median_filter
 import bottleneck
 import scipy.interpolate
 numpy.seterr(divide='ignore', invalid='ignore')
+import itertools
+import math
+import matplotlib
 
 # Disable nasty and useless RankWarning when spline fitting
 import warnings
@@ -46,6 +49,82 @@ lineinfo_cols = ["PIXELPOS",
 lineinfo_colidx = {}
 for idx,name in enumerate(lineinfo_cols):
     lineinfo_colidx[name] = idx
+
+
+
+
+
+def rssmodelwave(grating,grang,artic,cbin,cols):
+#
+# Taken from Ken Nordsieck's specpolmap.py
+# https://github.com/saltastro/SALTsandbox/blob/master/polSALT/polsalt/specpolmap.py
+#
+
+    #
+    # Define some constants - taken from 
+    # https://github.com/saltastro/SALTsandbox/blob/master/polSALT/polsalt/data/gratings.txt
+    #
+    # from ArcModel.xlsx 7/10/2012, grating-alignment.xlsx/120414
+    # Grating	l/mm	 Gam0      y0	  dy/arang
+    # PG0300	 300.00	 0.000    2055.7	 0.307        
+    # PG0900	 903.89	-0.265    2042.2	-0.156
+    # PG1300	1299.76	-0.265    2054.3	 0.198
+    # PG1800	1801.89	-0.265    2050.1	-0.067
+    # PG2300	2302.60	-0.265    2059.5	 0.127
+    # PG3000	3000.55	-0.265    2060.6	-0.151
+    __rss_gratings = {
+        'PG0300': (300.00 ,  0.000, 2055.7,  0.307),      
+        'PG0900': (903.89 , -0.265, 2042.2, -0.156),
+        'PG1300': (1299.76, -0.265, 2054.3,  0.198),
+        'PG1800': (1801.89, -0.265, 2050.1, -0.067),
+        'PG2300': (2302.60, -0.265, 2059.5,  0.127),
+        'PG3000': (3000.55, -0.265, 2060.6, -0.151),
+    }
+
+    # more constants, from
+    # https://github.com/saltastro/SALTsandbox/blob/master/polSALT/polsalt/data/spec.txt
+    # fixed spectrograph constants
+    Grat0  = 1.407798403  #	deg
+    Home0  = -0.063025809 #deg
+    ArtErr = -4.2E-05  #	(1+Err)*.75 deg
+    T2Con  = -5.00	
+    T3Con  = -1.00
+    Fcama5 = -0.0023		
+    Fcama4 = 0.0365
+    Fcama3 = -0.2100
+    Fcama2 = 0.5061
+    Fcama1 = -0.1861
+    Fcamb  = 328.697 #   mm
+
+        
+    # #   compute wavelengths from model (this can probably be done using pyraf spectrograph model)
+    # spec=np.loadtxt(datadir+"spec.txt",usecols=(1,))
+    # Grat0,Home0,ArtErr,T2Con,T3Con=spec[0:5]
+
+    FCampoly = [Fcama5, Fcama4, Fcama3, Fcama2, Fcama1, Fcamb] #spec[5:11]
+    
+    # grname=np.loadtxt(datadir+"gratings.txt",dtype=str,usecols=(0,))
+    # grlmm,grgam0=np.loadtxt(datadir+"gratings.txt",usecols=(1,2),unpack=True)
+
+    lmm, grgam0, y0, dy = __rss_gratings[grating]
+
+    # grnum = np.where(grname==grating)[0][0]
+    # lmm = grlmm[grnum]
+    alpha_r = numpy.radians(grang+Grat0)
+    beta0_r = numpy.radians(artic*(1+ArtErr)+Home0)-alpha_r
+    gam0_r = numpy.radians(grgam0)
+    lam0 = 1e7*numpy.cos(gam0_r)*(numpy.sin(alpha_r) + numpy.sin(beta0_r))/lmm
+    ww = lam0/1000. - 4.
+    fcam = numpy.polyval(FCampoly,ww)
+    disp = (1e7*numpy.cos(gam0_r)*numpy.cos(beta0_r)/lmm)/(fcam/.015)
+    dfcam = 3.162*disp*numpy.polyval([FCampoly[x]*(5-x) for x in range(5)],ww)
+    T2 = -0.25*(1e7*numpy.cos(gam0_r)*numpy.sin(beta0_r)/lmm)/(fcam/47.43)**2 + T2Con*disp*dfcam
+    T3 = (-1./24.)*3162.*disp/(fcam/47.43)**2 + T3Con*disp
+    T0 = lam0 + T2 
+    T1 = 3162.*disp + 3*T3
+    X = (numpy.array(range(cols))+1-cols/2)*cbin/3162.
+    lam_X = T0+T1*X+T2*(2*X**2-1)+T3*(4*X**3-3*X)
+    return lam_X
 
 
 
@@ -469,6 +548,55 @@ def manual_loadtxt(filename, n_cols=2):
     return numpy.array(data)
 
 
+class  KenRSSModel( object ):
+
+    def __init__(self, primhdr, ncols):
+
+        self.logger = logging.getLogger("KenRSS")
+
+        self.ncols = ncols
+
+        self.primhdr = primhdr
+        self.rbin,self.cbin = numpy.array(primhdr["CCDSUM"].split(" ")).astype(int)
+        self.grating = primhdr['GRATING'].strip()
+        self.grang = float(primhdr['GR-ANGLE'])
+        self.artic = float(primhdr['CAMANG'])
+        
+        self.logger.info("RSS model: bin: %d,%d - grating: %s - angle: %.2f - artic: %.2f  - columns: %d" % (
+            self.rbin,self.cbin,self.grating,self.grang,self.artic,self.ncols))
+
+        self.compute()
+        
+    def compute(self, grating=None, grang=None, artic=None, cbin=None, ncols=None, colpos=None):
+
+        _grating = self.grating if grating == None else grating
+        _grang = self.grang if grang == None else grang
+        _artic = self.artic if artic == None else artic
+        _cbin = self.cbin if cbin == None else cbin
+        _ncols = self.ncols if ncols == None else ncols
+
+        self.all_wavelength = rssmodelwave(_grating,_grang,_artic,_cbin,_ncols)
+
+        # fit a simple linear interpolation to the curve so we can look up 
+        # wavelengths for a given pixel more easily
+        self.wl_interpol = scipy.interpolate.interp1d(
+            x=numpy.arange(self.all_wavelength.shape[0]),
+            y=self.all_wavelength
+        )
+
+        if (not colpos == None):
+            return self.compute_wl(colpos)
+
+    def compute_wl(self, colpos):
+        return self.wl_interpol(colpos)
+
+    def central_wavelength(self):
+        return numpy.median(self.all_wavelength)
+    
+    def get_wavelength_list(self):
+        return self.all_wavelength
+
+
 def find_wavelength_solution(filename, line):
 
     logger = logging.getLogger("FindWLS")
@@ -543,7 +671,33 @@ def find_wavelength_solution(filename, line):
     # based on the wavelength model from RSS translate x-positions into wavelengths
     #print dispersion
     #print lineinfo[:,0]
-    wl = lineinfo[:,0] * dispersion + blue_edge
+
+    # Use Ken's RSS model data here
+    logger.info("Creating dispersion model")
+    cols = hdulist['SCI'].data.shape[1]
+    kens_model = KenRSSModel(hdulist[0].header, cols)
+    # primhdr = hdulist[0].header
+    # rbin,cbin = numpy.array(primhdr["CCDSUM"].split(" ")).astype(int)
+    # grating = primhdr['GRATING'].strip()
+    # grang = float(primhdr['GR-ANGLE'])
+    # artic = float(primhdr['CAMANG'])
+    # logger.info("RSS model: bin: %d,%d - grating: %s - angle: %.2f - artic: %.2f  - columns: %d" % (
+    #     rbin,cbin,grating,grang,artic,cols))
+    # all_wavelength = rssmodelwave(grating,grang,artic,cbin,cols)
+    # # fit a simple linear interpolation to the curve so we can look up 
+    # # wavelengths for a given pixel more easily
+    # wl_interpol = scipy.interpolate.interp1d(
+    #     x=numpy.arange(all_wavelength.shape[0]),
+    #     y=all_wavelength
+    # )
+
+    # Now use the wavelength model to translate line position in pixel coordinates
+    # into wavelength positions
+    wl = kens_model.compute_wl(lineinfo[:,0])
+    numpy.savetxt("rss_lines", numpy.append(wl.reshape((-1,1)),
+                                            lineinfo, axis=1))
+
+    # wl = lineinfo[:,0] * dispersion + blue_edge
     #lineinfo = numpy.append(lineinfo, wl.reshape((-1,1)), axis=1)
     #numpy.savetxt("linecal", lineinfo)
 
@@ -572,7 +726,7 @@ def find_wavelength_solution(filename, line):
     #
     in_range = (lines[:,0] > numpy.min(wl)) & (lines[:,0] < numpy.max(wl))
     ref_lines = lines[in_range]
-    logger.debug("Found these lines for fitting:\n%s" % (
+    logger.info("Found these lines for fitting:\n%s" % (
             "\n".join(["%10.4f" % l for l in ref_lines[:,0]])))
     #print ref_lines
 
@@ -585,187 +739,390 @@ def find_wavelength_solution(filename, line):
     #
     ############################################################################
 
-    reference_pixel_x = 0.5 * spec.shape[0]
+    camangle = kens_model.artic
+    gratingangle = kens_model.grang
 
-    # dispersion was calculated above
-    # central wavelength 
-    central_wavelength = 0.5 * (blue_edge + red_edge)
-    max_dispersion_error = 0.00 #10 # +/- 10% should be plenty
-    dispersion_search_steps = 0.01 # vary dispersion in 1% steps
-    n_dispersion_steps = (max_dispersion_error / dispersion_search_steps) * 2 + 1
+    max_d_camangle = 1.
+    max_d_gratingangle = 1.
+
+    step_camangle = 0.05
+    step_gratingangle = 0.1
+
+    n_steps_camangle = int(math.ceil(2*max_d_camangle / step_camangle + 1))
+    n_steps_gratingangle = int(math.ceil(2*max_d_gratingangle / step_gratingangle + 1))
+
+    results = numpy.zeros((n_steps_camangle, n_steps_gratingangle))
+
+    try_camangles = numpy.linspace(camangle-max_d_camangle, 
+                                   camangle+max_d_camangle, 
+                                   n_steps_camangle)
+    try_gratingangles = numpy.linspace(gratingangle-max_d_gratingangle, 
+                                       gratingangle+max_d_gratingangle, 
+                                       n_steps_gratingangle)
+
+    
+    ref_kdtree = scipy.spatial.cKDTree(ref_lines[:,0].reshape((-1,1)))
+    matching_radius=1.0
+    for idx_camangle, idx_gratingangle in \
+        itertools.product(range(n_steps_camangle), range(n_steps_gratingangle)):
+
+        camangle = try_camangles[idx_camangle]
+        gratingangle = try_gratingangles[idx_gratingangle]
+
+        #print camangle, gratingangle
+
+
+        #match_line_catalogs(arc, ref, matching_radius, verbose=False,
+        #                col_ref=0, col_arc=-1, dumpfile=None):
+
+
+        # compute the wavelength position for all lines using the
+        # spectrograph parameters of this iteration
+        wl_lines = kens_model.compute(grang=gratingangle,
+                                      artic=camangle,
+                                      colpos=lineinfo[:,0])
+
+        #print wl_lines, ref_lines.shape
+                                      
+        nearest_neighbor, i = ref_kdtree.query(
+            x=wl_lines.reshape((-1,1)), 
+            k=1, # only find 1 nearest neighbor
+            p=1, # use linear distance
+            distance_upper_bound=matching_radius)
+
+        # i is the index with the closest match
+        # good matches have i within legal range
+        good_match = i < ref_lines.shape[0]
+
+        results[idx_camangle, idx_gratingangle] = numpy.sum(good_match)
+
+    numpy.savetxt("results", results)
+
+    # fig=matplotlib.pyplot.figure()
+    # ax=fig.add_subplot(111)
+    # ax.imshow(results, interpolation='none')
+    # fig.show()
+    # matplotlib.pyplot.show()
+
+    most_matches = numpy.unravel_index(numpy.argmax(results), results.shape)
+
+    print "best results: %d matches for camangle=%.3f (%.3f), gratingangle=%.3f (%.3f)" % (
+        results[most_matches], 
+        try_camangles[most_matches[0]], hdulist[0].header['CAMANG'],
+        try_gratingangles[most_matches[1]], hdulist[0].header['GR-ANGLE'],
+    )
+    best_camangle = try_camangles[most_matches[0]]
+    best_gratingangle = try_gratingangles[most_matches[1]]
 
     #
-    # compute what dispersion factors we are trying 
+    # Now write the complete spectrum with the wavelength calibration
     #
-    trial_dispersions = numpy.linspace(1.0-max_dispersion_error, 
-                                      1.0+max_dispersion_error,
-                                      n_dispersion_steps) * dispersion 
-    n_matches = numpy.zeros((trial_dispersions.shape[0]))
-    matched_cats = [None] * trial_dispersions.shape[0]
+    print spec.shape
+
+    kens_model.compute(artic=best_camangle, grang=best_gratingangle, ncols=spec.shape[0])
+    spec_wl = kens_model.get_wavelength_list()
+    numpy.savetxt("spec_precalib", numpy.append(spec_wl.reshape((-1,1)),
+                                                spec.reshape((-1,1)), axis=1))
 
     #
-    # Now try each dispersion, one by one, and compute what wavelength offset 
-    # we would need to make the maximum number of lines match known lines from 
-    # the line catalog.
+    # Now cross-identify all lines, and do a least-sq fit to further optimize 
+    # the spectrograph angles and compute the final wavelength calibration fit
     # 
 
-    #
-    # New: Assume we know line centers to within a pixel, then we can match 
-    # lines that lie within a 1-pixel radius
-    #
-    # Remember: units here are angstroem !!!
-    matching_radius = 4 * dispersion
-    logger.debug("Considering lines within %.1f A of a known ARC line as matched!" % (
-            matching_radius))
-    # print "before loop:", lineinfo.shape
-
-    for idx, _dispersion in enumerate(trial_dispersions):
-
-        # compute dispersion including the correction
-        #_dispersion = dispersion * disp_factor
-
-        # copy the original line info so we don't accidently overwrite important data
-        _lineinfo = numpy.array(lineinfo)
-        
-        # find optimal line shifts and match lines 
-        # consider lines within 5A of each other matches
-        # --> this most likely will depend on spectral resolution and binning
-        matched_cat = find_matching_lines(ref_lines, _lineinfo, 
-                                          rss,
-                                          _dispersion, central_wavelength,
-                                          reference_pixel_x,
-                                          matching_radius = matching_radius, 
+    lineinfo[:,5] = kens_model.compute(
+        artic=best_camangle, 
+        grang=best_gratingangle,
+        colpos = lineinfo[:,0],
         )
-
-        # Save results for later picking of the best one
-        n_matches[idx] = matched_cat.shape[0]
-        matched_cats[idx] = matched_cat
-
-        numpy.savetxt("dispersion_scale_%.3f" % (_dispersion), matched_cat)
-
-    #
-    # Find the solution with the most matched lines
-    #
-    n_max = numpy.argmax(n_matches)
     
-    #print
+    numpy.savetxt("linelist.calib", lineinfo)
 
-    #print "most matched lines:", n_matches[n_max],
-    #print "best dispersion: %f" % (trial_dispersions[n_max])
-    logger.debug("Choosing best solution: %4d for dispersion %8.4f A/px" % (
-            n_matches[n_max], trial_dispersions[n_max]))
+    # one last time, match the two line lists, using the same matching radius 
+    # as above
 
-    numpy.savetxt("matchcount", numpy.append(trial_dispersions.reshape((-1,1)),
-                                             n_matches.reshape((-1,1)),
-                                             axis=1))
+    nearest_neighbor, i = ref_kdtree.query(
+        x=lineinfo[:,5].reshape((-1,1)), 
+        k=1, # only find 1 nearest neighbor
+        p=1, # use linear distance
+        distance_upper_bound=matching_radius)
+    good_matches = i < ref_lines.shape[0]
 
-    matched = matched_cats[n_max]
-    numpy.savetxt("matched.lines.best", matched)
+    print "\n-------------"*5
+    print nearest_neighbor.shape
+    print nearest_neighbor
+    print i.shape
+    print i
+    print good_matches
+    print lineinfo.shape
+    print ref_lines.shape
+    print numpy.sum(good_matches)
+
+    n_matches = numpy.sum(good_matches)
+
+    # matched_ref = ref_lines[:,0][good_matches]
+    # matched_line_idx = i[good_matches]
     
-    # print "***************************\n"*5
-    # print lineinfo.shape
+    print "============"
+    matched_catalog = numpy.zeros((n_matches, lineinfo.shape[1]+ref_lines.shape[1]))
+    print matched_catalog.shape
+    
+    matched_catalog[:,:lineinfo.shape[1]] = lineinfo[good_matches]
+    matched_catalog[:,lineinfo.shape[1]:] = ref_lines[i[good_matches]]
 
-    logger.info("Computing an analytical wavelength calibration...")
-    wls = compute_wavelength_solution(matched, max_order=3)
+    numpy.savetxt("matched_lines.dat", matched_catalog)
 
-    spec_x = numpy.polynomial.polynomial.polyval(
-        numpy.arange(spec.shape[0]), wls).reshape((-1,1))
-    spec_combined = numpy.append(spec_x, spec.reshape((-1,1)), axis=1)
-    numpy.savetxt("spec.calib.start", spec_combined)
+    print "xxxxxxxxxxxxx"
 
+    def fit__wavelength(p_fit, line_x, rssmodel):
+        computed_wl = rssmodel.compute(
+            grang=p_fit[0],
+            artic=p_fit[1],
+            colpos=line_x)
+        return computed_wl
+
+    def fit__wavelength_error(p_fit, matched_lines, rssmodel):
+        line_wl = fit__wavelength(p_fit, matched_lines[:,0], rssmodel)
+        ref_wl = matched_lines[:,len(lineinfo_cols)]
+        delta_wl = line_wl - ref_wl # add some weighting here???
+        return delta_wl
+
+    p_start = [best_gratingangle, best_camangle]
+    fit_args = (matched_catalog, kens_model)
+    _fit = scipy.optimize.leastsq(fit__wavelength_error,
+                                  p_start, 
+                                  args=fit_args,
+                                  maxfev=500,
+                                  full_output=1)
+    p_final = _fit[0]
+
+    print p_start, " ==> ", p_final
+
+    lineinfo[:,lineinfo_colidx['WAVELENGTH']] = fit__wavelength(
+        p_final, lineinfo[:, lineinfo_colidx["PIXELPOS"]], kens_model)
+    matched_catalog[:, lineinfo_colidx['WAVELENGTH']] = fit__wavelength(
+        p_final, matched_catalog[:, lineinfo_colidx["PIXELPOS"]], kens_model)
+
+    numpy.savetxt("matched_lines_afterfit.dat", matched_catalog)
+
+    # 
+    # compute rms
     #
-    # Now we have a best-match solution
-    # Match lines again to see what the RMS is - use a small matching radius now
-    #
+    rms = numpy.std(matched_catalog[:, lineinfo_colidx['WAVELENGTH']] - \
+                    matched_catalog[:, len(lineinfo_cols)])
+    print "Found RMS:", rms
 
-    ############################################################################
-    #
-    # Since the original matching was done using a simple polynomial form, 
-    # let's now iterate the rough solution using higher order polynomials to 
-    # (hopefully) match a larger number of lines
-    #
-    # Add here: 
-    # - Keep an eye on r.m.s. of the fit, and the number of matched lines
-    # - with every step, reduce the matching radius to make sure we are matching
-    #   only with the most likely counterpart in case of close line (blends)
-    #
-    ############################################################################
-    #prev_wls = wls
-    #matching_radius = 2*dispersion
-    logger.debug("Refining WLS using all %d lines" % (lineinfo.shape[0]))
-    for iteration in range(3):
-
-        #sys.stdout.write("\n\n\n"); sys.stdout.flush()
-
-        _linelist = numpy.array(lineinfo)
-
-        # Now compute the new wavelength for each line
-        _linelist[:,lineinfo_colidx['WAVELENGTH']] = numpy.polynomial.polynomial.polyval(
-            _linelist[:,lineinfo_colidx['PIXELPOS']], wls)
-
-        numpy.savetxt("lineinfo.iteration=%d" % (iteration+1), _linelist, "%10.4f")
-
-        # compute wl with polyval
-        # _wl = lineinfo[:,0]
-        # numpy.savetxt("final.1", _wl)
-
-        # numpy.savetxt("final.2", numpy.polynomial.polynomial.polyval(_wl, wls))
-        # numpy.savetxt("final.3", _wl*wls[1]+wls[0])
-
-        # With the refined wavelength solution, match lines between the 
-        # ARC spectrum and the reference line catalog
-        new_matches = match_line_catalogs(_linelist, ref_lines, 
-                                          matching_radius=50, #matching_radius, 
-                                          verbose=False,
-                                          col_arc=lineinfo_colidx['WAVELENGTH'], 
-                                          col_ref=0,
-                                          dumpfile="finalmatch.%d" % (iteration+1))
-
-        logger.debug("WLS Refinement step %3d: now %3d matches!" % (
-                iteration+1, new_matches.shape[0]))
-
-        # -- for debugging --
-        numpy.savetxt("matched.cat.iter%d" % (iteration+1), new_matches)
-
-        #
-        # Before fitting, iteratively reject obvious outliers most likely caused
-        # by matching wrong lines
-        #
-        likely_outlier = numpy.isnan(new_matches[:,lineinfo_colidx['WAVELENGTH']])
-        for reject in range(3):
-            diff_angstroem = new_matches[:,lineinfo_colidx['WAVELENGTH']] - \
-                new_matches[:,len(lineinfo_colidx)]
-            med = numpy.median(diff_angstroem[~likely_outlier])
-            stdx = numpy.std(diff_angstroem[~likely_outlier])
-            sigma = scipy.stats.scoreatpercentile(diff_angstroem[~likely_outlier], [16,84])
-            std = 0.5*(sigma[1]-sigma[0])
-            likely_outlier = (diff_angstroem > med+2*std) | (diff_angstroem < med-2*std)
-            logger.debug("Med/Std/StdX= %f / %f / %f" % (med, std, stdx))
-
-        # Now we have a better idea on outliers, so reject them and work with 
-        # what's left
-        new_matches = new_matches[~likely_outlier]
-        logger.debug("WLS Refinement step %3d: %3d matches left after outliers!" % (
-                iteration+1, new_matches.shape[0]))
-
-        # And with the matched line list, compute a new wavelength solution
-        wls = compute_wavelength_solution(new_matches, max_order=4)#+iteration)
-
-        # -- for debugging --
-        numpy.savetxt("matched.outlierreject.iter%d" % (iteration+1), new_matches)
-        #
-        spec_x = numpy.polynomial.polynomial.polyval(
-            numpy.arange(spec.shape[0])+1., wls).reshape((-1,1))
-        spec_combined = numpy.append(spec_x, spec.reshape((-1,1)), axis=1)
-        numpy.savetxt("spec.calib.iteration_%d" % (iteration+1), spec_combined)
-
-        #prev_wls = wls
-
-    #return
-    final_match = matched
+    wls = compute_wavelength_solution(matched_catalog, max_order=3)
+    print wls
 
 
-    numpy.savetxt("matched.cat.final", final_match)
+    # # # set the indices for bad matches to a valid value
+    # # i[~good_matches] = 0
+
+    # # matched = numpy.zeros((arc.shape[0], (arc.shape[1]+ref.shape[1])))
+    # # matched[:,:arc.shape[1]] = arc
+    # # matched[:,arc.shape[1]:] = ref[i]
+    # # #print "XXXXXXXXXXXX\n"*3,ref.shape, ref[i].shape, i.shape, bad_matches.shape
+    # # #print bad_matches
+    # # numpy.savetxt("matched_raw", matched)
+    # # numpy.savetxt("matched_bad", bad_matches)
+    # # #sys.exit(0)
+
+    # # #print "XXXX\n"*3
+    # # matched = matched[~bad_matches]
+    
+
+    # return
+
+
+    # i = numpy.array(i)
+    # bad_matches = (i>=ref.shape[0])
+    # i[bad_matches] = 0
+
+        
+    # return
+
+    
+    # reference_pixel_x = 0.5 * spec.shape[0]
+
+    # # dispersion was calculated above
+    # # central wavelength 
+    # central_wavelength = kens_model.central_wavelength() #numpy.median(all_wavelength)  # 0.5 * (blue_edge + red_edge)
+    # max_dispersion_error = 0.00 #10 # +/- 10% should be plenty
+    # dispersion_search_steps = 0.01 # vary dispersion in 1% steps
+    # n_dispersion_steps = (max_dispersion_error / dispersion_search_steps) * 2 + 1
+
+    # #
+    # # compute what dispersion factors we are trying 
+    # #
+    # trial_dispersions = numpy.linspace(1.0-max_dispersion_error, 
+    #                                   1.0+max_dispersion_error,
+    #                                   n_dispersion_steps) * dispersion 
+    # n_matches = numpy.zeros((trial_dispersions.shape[0]))
+    # matched_cats = [None] * trial_dispersions.shape[0]
+
+    # #
+    # # Now try each dispersion, one by one, and compute what wavelength offset 
+    # # we would need to make the maximum number of lines match known lines from 
+    # # the line catalog.
+    # # 
+
+    # #
+    # # New: Assume we know line centers to within a pixel, then we can match 
+    # # lines that lie within a 1-pixel radius
+    # #
+    # # Remember: units here are angstroem !!!
+    # matching_radius = 2 * dispersion
+    # logger.debug("Considering lines within %.1f A of a known ARC line as matched!" % (
+    #         matching_radius))
+    # # print "before loop:", lineinfo.shape
+
+    # for idx, _dispersion in enumerate(trial_dispersions):
+
+    #     # compute dispersion including the correction
+    #     #_dispersion = dispersion * disp_factor
+
+    #     # copy the original line info so we don't accidently overwrite important data
+    #     _lineinfo = numpy.array(lineinfo)
+        
+    #     # find optimal line shifts and match lines 
+    #     # consider lines within 5A of each other matches
+    #     # --> this most likely will depend on spectral resolution and binning
+    #     matched_cat = find_matching_lines(ref_lines, _lineinfo, 
+    #                                       rss,
+    #                                       _dispersion, central_wavelength,
+    #                                       reference_pixel_x,
+    #                                       matching_radius = matching_radius, 
+    #     )
+
+    #     # Save results for later picking of the best one
+    #     n_matches[idx] = matched_cat.shape[0]
+    #     matched_cats[idx] = matched_cat
+
+    #     numpy.savetxt("dispersion_scale_%.3f" % (_dispersion), matched_cat)
+
+    # #
+    # # Find the solution with the most matched lines
+    # #
+    # n_max = numpy.argmax(n_matches)
+    
+    # #print
+
+    # #print "most matched lines:", n_matches[n_max],
+    # #print "best dispersion: %f" % (trial_dispersions[n_max])
+    # logger.debug("Choosing best solution: %4d for dispersion %8.4f A/px" % (
+    #         n_matches[n_max], trial_dispersions[n_max]))
+
+    # numpy.savetxt("matchcount", numpy.append(trial_dispersions.reshape((-1,1)),
+    #                                          n_matches.reshape((-1,1)),
+    #                                          axis=1))
+
+    # matched = matched_cats[n_max]
+    # numpy.savetxt("matched.lines.best", matched)
+    
+    # # print "***************************\n"*5
+    # # print lineinfo.shape
+
+    # logger.info("Computing an analytical wavelength calibration...")
+    # wls = compute_wavelength_solution(matched, max_order=3)
+
+    # spec_x = numpy.polynomial.polynomial.polyval(
+    #     numpy.arange(spec.shape[0]), wls).reshape((-1,1))
+    # spec_combined = numpy.append(spec_x, spec.reshape((-1,1)), axis=1)
+    # numpy.savetxt("spec.calib.start", spec_combined)
+
+    # #
+    # # Now we have a best-match solution
+    # # Match lines again to see what the RMS is - use a small matching radius now
+    # #
+
+    # ############################################################################
+    # #
+    # # Since the original matching was done using a simple polynomial form, 
+    # # let's now iterate the rough solution using higher order polynomials to 
+    # # (hopefully) match a larger number of lines
+    # #
+    # # Add here: 
+    # # - Keep an eye on r.m.s. of the fit, and the number of matched lines
+    # # - with every step, reduce the matching radius to make sure we are matching
+    # #   only with the most likely counterpart in case of close line (blends)
+    # #
+    # ############################################################################
+    # #prev_wls = wls
+    # matching_radius = 2*dispersion
+    # logger.debug("Refining WLS using all %d lines" % (lineinfo.shape[0]))
+    # for iteration in range(3):
+
+    #     #sys.stdout.write("\n\n\n"); sys.stdout.flush()
+
+    #     _linelist = numpy.array(lineinfo)
+
+    #     # Now compute the new wavelength for each line
+    #     _linelist[:,lineinfo_colidx['WAVELENGTH']] = numpy.polynomial.polynomial.polyval(
+    #         _linelist[:,lineinfo_colidx['PIXELPOS']], wls)
+
+    #     numpy.savetxt("lineinfo.iteration=%d" % (iteration+1), _linelist, "%10.4f")
+
+    #     # compute wl with polyval
+    #     # _wl = lineinfo[:,0]
+    #     # numpy.savetxt("final.1", _wl)
+
+    #     # numpy.savetxt("final.2", numpy.polynomial.polynomial.polyval(_wl, wls))
+    #     # numpy.savetxt("final.3", _wl*wls[1]+wls[0])
+
+    #     # With the refined wavelength solution, match lines between the 
+    #     # ARC spectrum and the reference line catalog
+    #     new_matches = match_line_catalogs(_linelist, ref_lines, 
+    #                                       matching_radius=1.7, #matching_radius, # wsa 50 XXX
+    #                                       verbose=False,
+    #                                       col_arc=lineinfo_colidx['WAVELENGTH'], 
+    #                                       col_ref=0,
+    #                                       dumpfile="finalmatch.%d" % (iteration+1))
+
+    #     logger.debug("WLS Refinement step %3d: now %3d matches!" % (
+    #             iteration+1, new_matches.shape[0]))
+
+    #     # -- for debugging --
+    #     numpy.savetxt("matched.cat.iter%d" % (iteration+1), new_matches)
+
+    #     #
+    #     # Before fitting, iteratively reject obvious outliers most likely caused
+    #     # by matching wrong lines
+    #     #
+    #     likely_outlier = numpy.isnan(new_matches[:,lineinfo_colidx['WAVELENGTH']])
+    #     for reject in range(3):
+    #         diff_angstroem = new_matches[:,lineinfo_colidx['WAVELENGTH']] - \
+    #             new_matches[:,len(lineinfo_colidx)]
+    #         med = numpy.median(diff_angstroem[~likely_outlier])
+    #         stdx = numpy.std(diff_angstroem[~likely_outlier])
+    #         sigma = scipy.stats.scoreatpercentile(diff_angstroem[~likely_outlier], [16,84])
+    #         std = 0.5*(sigma[1]-sigma[0])
+    #         likely_outlier = (diff_angstroem > med+2*std) | (diff_angstroem < med-2*std)
+    #         logger.debug("Med/Std/StdX= %f / %f / %f" % (med, std, stdx))
+
+    #     # Now we have a better idea on outliers, so reject them and work with 
+    #     # what's left
+    #     new_matches = new_matches[~likely_outlier]
+    #     logger.debug("WLS Refinement step %3d: %3d matches left after outliers!" % (
+    #             iteration+1, new_matches.shape[0]))
+
+    #     # And with the matched line list, compute a new wavelength solution
+    #     wls = compute_wavelength_solution(new_matches, max_order=4)#+iteration)
+
+    #     # -- for debugging --
+    #     numpy.savetxt("matched.outlierreject.iter%d" % (iteration+1), new_matches)
+    #     #
+    #     spec_x = numpy.polynomial.polynomial.polyval(
+    #         numpy.arange(spec.shape[0])+1., wls).reshape((-1,1))
+    #     spec_combined = numpy.append(spec_x, spec.reshape((-1,1)), axis=1)
+    #     numpy.savetxt("spec.calib.iteration_%d" % (iteration+1), spec_combined)
+
+    #     #prev_wls = wls
+
+    # #return
+    # final_match = matched
+
+
+    # numpy.savetxt("matched.cat.final", final_match)
 
 
     # Also save the original spectrum as text file
@@ -785,7 +1142,8 @@ def find_wavelength_solution(filename, line):
         'spec': spec,
         'spec_combined': spec_combined,
         'linelist_ref': lines,
-        'linelist_arc': _linelist,
+        # 'linelist_arc': _linelist,
+        'linelist_arc': lineinfo,
         'line': line,
         'wl_fit_coeffs': wls,
         }
