@@ -457,15 +457,17 @@ def compute_2d_wavelength_solution(arc_filename,
                                    arc_region_file=None,
                                    return_slitprofile=False):
 
-    logger = logging.getLogger("Comp2D-WLS")
-
     if (type(arc_filename) == str and os.path.isfile(arc_filename)):
         # We received a filename as parameter
+        _, bn = os.path.split(arc_filename)
+        logger = logging.getLogger("Comp2D-WLS(%s)" % (bn))
         logger.info("Tracing arcs in file %s" % (arc_filename))
         hdulist = pyfits.open(arc_filename)
     elif (type(arc_filename) == pyfits.hdu.hdulist.HDUList):
         # This is already a valid HDUlist, so we don't need to open anything
         hdulist = arc_filename
+        logger = logging.getLogger("Comp2D-WLS(HDU)")
+
 
         
     line = hdulist['SCI'].data.shape[0]/2
@@ -550,7 +552,7 @@ def compute_2d_wavelength_solution(arc_filename,
 
     else: 
         # if N negative, use the absolute value of N as S/N cutoff
-        strong_enough = wls_data['linelist_arc'][:,wlcal.lineinfo_colidx['S2N']] > 120 #math.fabs(n_lines_to_trace)
+        strong_enough = wls_data['linelist_arc'][:,wlcal.lineinfo_colidx['S2N']] > math.fabs(n_lines_to_trace)
         trace_line_indices = numpy.arange(wls_data['linelist_arc'].shape[0])[strong_enough]
 
     # Reset ds9_arc
