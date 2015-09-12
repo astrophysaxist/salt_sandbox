@@ -263,7 +263,8 @@ def subpixel_centroid_trace(data, tracedata, width=5, dumpfile=None):
     #
     # With that info, we can now create the flux-weighted center position
     #
-    weighted_center_x = bottleneck.nansum(data_sel*line_positions, axis=1)/bottleneck.nansum(data_sel, axis=1)
+    integrated_intensity = bottleneck.nansum(data_sel, axis=1)
+    weighted_center_x = bottleneck.nansum(data_sel*line_positions, axis=1)/integrated_intensity
     #print weighted_center_x.shape
 
     if (not dumpfile == None and createdebugfiles):
@@ -274,7 +275,7 @@ def subpixel_centroid_trace(data, tracedata, width=5, dumpfile=None):
             pyfits.ImageHDU(data=line_positions)])
         hdulist.writeto(dumpfile, clobber=True)
 
-    return weighted_center_x
+    return weighted_center_x, integrated_intensity
 
 
     
@@ -540,6 +541,10 @@ def compute_2d_wavelength_solution(arc_filename,
     #
     # Also eliminate all lines with nearby companions that might cause problems
     #
+    print "\n**********"*7
+    print wls_data['linelist_arc']
+    print "\n**********"*7
+    time.sleep(2)
 
     if (n_lines_to_trace == 0):
         # if 0, use all lines
@@ -555,12 +560,15 @@ def compute_2d_wavelength_solution(arc_filename,
         strong_enough = wls_data['linelist_arc'][:,wlcal.lineinfo_colidx['S2N']] > math.fabs(n_lines_to_trace)
         trace_line_indices = numpy.arange(wls_data['linelist_arc'].shape[0])[strong_enough]
 
+
     # Reset ds9_arc
     if (not arc_region_file == None):
         pysalt.clobberfile(arc_region_file)
 
     traces = None
     logger.info("Preparing to trace %d lines" % (len(trace_line_indices)))
+    print trace_line_indices
+    print "XXX"
 
     for i in trace_line_indices: #range(n_lines_to_trace):
         linetrace = trace_single_line(fitsdata_gf, wls_data, i,
@@ -588,7 +596,7 @@ def compute_2d_wavelength_solution(arc_filename,
     # Go on and fit a full 2-D polynomial fit
     #
 
-    numpy.savetxt("all_traces", traces)
+    #numpy.savetxt("all_traces", traces)
 
     m = polyfit2d(x=traces[:,1],
                   y=traces[:,0],

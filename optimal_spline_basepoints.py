@@ -7,6 +7,8 @@ import scipy, scipy.interpolate, scipy.spatial
 import pysalt.mp_logging
 import logging
 import bottleneck
+import wlcal
+import skyline_intensity
 
 
 def satisfy_schoenberg_whitney(data, basepoints, k=3):
@@ -27,7 +29,12 @@ def satisfy_schoenberg_whitney(data, basepoints, k=3):
 def optimal_sky_subtraction(obj_hdulist, 
                             sky_regions=None,
                             slitprofile=None,
-                            N_points = 6000):
+                            N_points = 6000,
+                            compare=False,
+                            iterate=False,
+                            return_2d = True,
+                            skiplength=5,
+                            skyline_flat=None):
 
     logger = logging.getLogger("OptSplineKs")
 
@@ -50,6 +57,11 @@ def optimal_sky_subtraction(obj_hdulist,
     obj_cube[:,:,2] = obj_rms[:,:]
     obj_cube[:,:,3] = obj_spatial[:,:]
     
+    if (not type(skyline_flat) == type(None)):
+        # We also received a skyline flatfield for field flattening
+        obj_cube[:,:,1] /= skyline_flat.reshape((-1,1))
+        #return 1,2
+        pass
 
     obj_cube = obj_cube.reshape((-1, obj_cube.shape[2]))
 
@@ -74,9 +86,13 @@ def optimal_sky_subtraction(obj_hdulist,
         obj_cube = obj_cube[is_sky]
 
         
-    allskies = obj_cube[::5]
+    allskies = obj_cube[::skiplength]
 
-    
+    _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
+                         header=obj_hdulist['SCI.RAW'].header)
+    _x.name = "STEP1"
+    obj_hdulist.append(_x)
+
     
 
     # #
@@ -145,22 +161,23 @@ def optimal_sky_subtraction(obj_hdulist,
 
     wl_min, wl_max = numpy.min(allskies[:,0]), numpy.max(allskies[:,0])
 
-    logger.info("Computing spline using original/simple sampling")
-    wl_range = wl_max - wl_min
-    k_orig_ = numpy.linspace(wl_min, wl_max, N_points+2)[1:-1]
-    k_orig = satisfy_schoenberg_whitney(allskies[:,0], k_orig_, k=3)
-    spline_orig = scipy.interpolate.LSQUnivariateSpline(
-        x=allskies[:,0], 
-        y=allskies[:,1], 
-        t=k_orig,
-        w=None, # no weights (for now)
-        #bbox=None, #[wl_min, wl_max], 
-        k=3, # use a cubic spline fit
-        )
-    numpy.savetxt("spline_orig", numpy.append(k_orig.reshape((-1,1)),
-                                              spline_orig(k_orig).reshape((-1,1)),
-                                              axis=1)
-                  )
+    if (compare):
+        logger.info("Computing spline using original/simple sampling")
+        wl_range = wl_max - wl_min
+        k_orig_ = numpy.linspace(wl_min, wl_max, N_points+2)[1:-1]
+        k_orig = satisfy_schoenberg_whitney(allskies[:,0], k_orig_, k=3)
+        spline_orig = scipy.interpolate.LSQUnivariateSpline(
+            x=allskies[:,0], 
+            y=allskies[:,1], 
+            t=k_orig,
+            w=None, # no weights (for now)
+            #bbox=None, #[wl_min, wl_max], 
+            k=3, # use a cubic spline fit
+            )
+        numpy.savetxt("spline_orig", numpy.append(k_orig.reshape((-1,1)),
+                                                  spline_orig(k_orig).reshape((-1,1)),
+                                                  axis=1)
+                      )
 
     logger.info("Computing spline using optimized sampling")
     k_opt_good = satisfy_schoenberg_whitney(allskies[:,0], k_wl, k=3)
@@ -172,12 +189,38 @@ def optimal_sky_subtraction(obj_hdulist,
         bbox=[wl_min, wl_max], 
         k=3, # use a cubic spline fit
         )
-    numpy.savetxt("spline_opt", numpy.append(k_wl.reshape((-1,1)),
+
+    spec_simple = numpy.append(k_wl.reshape((-1,1)),
                                              spline_opt(k_wl).reshape((-1,1)),
                                              axis=1)
-                  )
+    numpy.savetxt("spline_opt", spec_simple)
 
-    
+    #
+    #
+    # Now we have a pretty good guess on what the entire sky spectrum looks like
+    # This means we can use known sky-lines to find and compensate for intensity 
+    # variations
+    #
+    #
+    if (not iterate):
+        if (return_2d):
+
+            pass
+        else:
+            # only return a 1-d spectrum, centered on the middle row 
+            line = obj_wl.shape[0]/2
+            wl = obj_wl[line,:]
+            spec = spline_opt(wl)
+            
+            return spec
+
+
+    _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
+                         header=obj_hdulist['SCI.RAW'].header)
+    _x.name = "STEP2"
+    obj_hdulist.append(_x)
+
+
     logger.info("Computing spline using optimized sampling and outlier rejection")
     good_point = (allskies[:,0] > 0)
     print good_point.shape
@@ -276,34 +319,79 @@ def optimal_sky_subtraction(obj_hdulist,
         logger.info("Done with iteration %d (%d pixels left)" % (iteration+1, good_data.shape[0]))
 
 
-    #
-    # Compute differences between data and spline fit for both cases
-    #
-    logger.info("computing comparison data")
-    fit_orig = spline_orig(allskies[:,0])
-    fit_opt = spline_opt(allskies[:,0])
-    
-    comp = numpy.zeros((allskies.shape[0], allskies.shape[1]+2))
-    comp[:, :allskies.shape[1]] = allskies[:,:]
-    comp[:, allskies.shape[1]+0] = fit_orig[:]
-    comp[:, allskies.shape[1]+1] = fit_opt[:]
-    numpy.savetxt("allskies.comp", comp)
+    _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
+                         header=obj_hdulist['SCI.RAW'].header)
+    _x.name = "STEP3"
+    obj_hdulist.append(_x)
+
+    if (compare):
+        #
+        # Compute differences between data and spline fit for both cases
+        #
+        logger.info("computing comparison data")
+        fit_orig = spline_orig(allskies[:,0])
+        fit_opt = spline_opt(allskies[:,0])
+
+        comp = numpy.zeros((allskies.shape[0], allskies.shape[1]+2))
+        comp[:, :allskies.shape[1]] = allskies[:,:]
+        comp[:, allskies.shape[1]+0] = fit_orig[:]
+        comp[:, allskies.shape[1]+1] = fit_opt[:]
+        numpy.savetxt("allskies.comp", comp)
 
 
     #
     # Now in a final step, compute the 2-D sky spectrum, subtract, and save results
     #
+    sky2d = None
+
     if (not spline_iter == None):
         sky2d = spline_iter(obj_wl.ravel()).reshape(obj_wl.shape)
+
+        if (not type(skyline_flat) == type(None)):
+            sky2d *= skyline_flat.reshape((-1,1))
+
         skysub = obj_data - sky2d
         ss_hdu = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
                                  data=skysub)
         ss_hdu.name = "SKYSUB.OPT"
         obj_hdulist.append(ss_hdu)
 
+        ss_hdu2 = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
+                                 data=sky2d)
+        ss_hdu2.name = "SKYSUB.IMG"
+        obj_hdulist.append(ss_hdu2)
 
-    return
 
+    return sky2d, spline_iter
+
+
+
+
+def estimate_slit_intensity_variations(hdulist, spline, sky_2d):
+
+    # We can use a horizontal cut through the 2-D sky as a template of the 
+    # sky-spectrum to extract sky emission lines
+    row = int(sky_2d.shape[0]/2)
+    skyspec = sky_2d[row,:]
+
+    skyline_list = wlcal.find_list_of_lines(skyspec, readnoise=1, avg_width=1)
+    print skyline_list
+    numpy.savetxt("skyline_list", skyline_list)
+
+    #
+    # Select a couple of the strong lines
+    #
+
+
+
+    #
+    # Now trace the arclines and do the subpixel centering so we can compute 
+    # the line intensity profiles
+    #
+
+    # data = hdulist['RAW'].data
+    
+    #subpixel_centroid_trace(data, tracedata, width=5, dumpfile=None)
 
 
 
@@ -322,9 +410,31 @@ if __name__ == "__main__":
         sky_regions = numpy.array([x.split(":") for x in user_sky.split(",")]).astype(numpy.int)
 
 
-    optimal_sky_subtraction(obj_hdulist, 
-                            sky_regions=sky_regions,
-                            N_points=6000)
+    simple_spec = optimal_sky_subtraction(obj_hdulist, 
+                                          sky_regions=sky_regions,
+                                          N_points=1000,
+                                          iterate=False,
+                                          skiplength=10, 
+                                          return_2d=False)
+    numpy.savetxt("simple_spec", simple_spec)
+
+    skyline_list = wlcal.find_list_of_lines(simple_spec, readnoise=1, avg_width=1)
+    print skyline_list
+
+    i, ia, im = skyline_intensity.find_skyline_profiles(obj_hdulist, skyline_list)
+    
+    #numpy.savetxt("skyline_list", skyline_list)
+
+
+    sky_2d, spline = optimal_sky_subtraction(obj_hdulist, 
+                                             sky_regions=sky_regions,
+                                             N_points=1000,
+                                             iterate=False,
+                                             skiplength=5,
+                                             skyline_flat=ia)
+
+    # # Now use the spline interpolator to create a list of strong skylines
+    # estimate_slit_intensity_variations(obj_hdulist, spline, sky_2d)
 
     obj_hdulist.writeto(obj_fitsfile[:-5]+".optimized.fits", clobber=True)
 
