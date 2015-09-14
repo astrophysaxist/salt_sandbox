@@ -10,9 +10,31 @@ import math
 
 from optimal_spline_basepoints import satisfy_schoenberg_whitney
 
+from matplotlib import pyplot
 
 
-def compute_good_spline(x, y, w, n_bases):
+def compute_good_spline(wl, flux, noise, n_bases):
+
+    
+    t_ref_points =  int(numpy.ceil((ref_wl_max - ref_wl_min) / basepoint_spacing)) \
+                    if basepoint_spacing > 0 else int(numpy.fabs(basepoint_spacing))
+    t_raw = numpy.linspace(ref_wl_min+3, ref_wl_max-3, t_ref_points)
+    t_ref = numpy.empty(shape=(t_raw.shape[0]+4))
+    t_ref[0] = t_raw[0]-2
+    t_ref[1] = t_raw[0]-1
+    t_ref[-2] = t_raw[-1]+1
+    t_ref[-1] = t_raw[-1]+2
+    t_ref[2:-2] = t_raw[:]
+    print t_ref
+
+    print "Fitting reference spline"
+    ref_spline =  scipy.interpolate.LSQUnivariateSpline(
+        x=ref[:,0], 
+        y=ref[:,1], 
+        t=t_raw, 
+        w=ref[:,2], 
+        #bbox=[None, None], 
+        k=3)
 
     pass
 
@@ -63,7 +85,7 @@ if __name__ == "__main__":
         x=ref[:,0], 
         y=ref[:,1], 
         t=t_raw, 
-        w=ref[:,2], 
+        w=1./ref[:,2], 
         #bbox=[None, None], 
         k=3)
 
@@ -91,7 +113,7 @@ if __name__ == "__main__":
         x=data[:,1], 
         y=data[:,2], 
         t=t_data_good, 
-        w=data[:,3], 
+        w=1./data[:,3], 
         #bbox=[None, None], 
         k=3)
 
@@ -112,6 +134,32 @@ if __name__ == "__main__":
     data_final[:, data.shape[1]+2] = flux_cal_factor
     data_final[:, data.shape[1]+3] = data[:,2] * flux_cal_factor
 
+    header = """\
+Column 1: running wavelength ID
+Column 2: wavelength in A
+Column 3: raw flux in ADU/pixel
+Column 4: RMS in ADU/pixel
+Column 5: spline-smoothed flux of reference spectrum
+Column 6: spline-smoothed flux of input spectrum
+Column 7: flux calibration factor (col. 5 divided by col. 6)
+Column 8: Flux-calibrated output spectrum
+"""
     print "saving results to %s" % (outfile)
-    numpy.savetxt(outfile, data_final)
+    numpy.savetxt(outfile, data_final, header=header)
                           
+
+    fig = pyplot.figure()
+    ax = fig.add_subplot(111)
+
+    ax.plot(data_final[:,1], data_final[:,-1], label="SALT")
+    ax.plot(ref[:,0], ref[:,1], label="Reference", c='grey')
+    ax.set_xlabel("Wavelength [A]")
+    ax.set_ylabel("flux")
+    ax.set_xlim((data_wl_min, data_wl_max))
+    ax.set_ylim((0, 14e-16))
+#    ax.legend(loc='best', borderaxespad=0.5, prop={'size':9})
+    ax.legend(loc='upper right', borderaxespad=0.5, prop={'size':9})
+
+    fig.tight_layout()
+    fig.set_size_inches((9,6))
+    fig.savefig(outfile+".png", dpi=100)
