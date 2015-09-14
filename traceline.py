@@ -268,12 +268,16 @@ def subpixel_centroid_trace(data, tracedata, width=5, dumpfile=None):
     #print weighted_center_x.shape
 
     if (not dumpfile == None and createdebugfiles):
-        # prepare a fits file with the rough-rectified line, with column numbers
-        hdulist = pyfits.HDUList([
-            pyfits.PrimaryHDU(),
-            pyfits.ImageHDU(data=data_sel),
-            pyfits.ImageHDU(data=line_positions)])
-        hdulist.writeto(dumpfile, clobber=True)
+        if (type(dumpfile) == pyfits.hdu.image.ImageHDU):
+            dumpfile.data = data_sel
+            dumpfile.header['OBJECT'] = "avg. line pos: %.2f px" % (numpy.median(line_positions))
+        else:
+            # prepare a fits file with the rough-rectified line, with column numbers
+            hdulist = pyfits.HDUList([
+                pyfits.PrimaryHDU(),
+                pyfits.ImageHDU(data=data_sel),
+                pyfits.ImageHDU(data=line_positions)])
+            hdulist.writeto(dumpfile, clobber=True)
 
     return weighted_center_x, integrated_intensity
 
@@ -281,7 +285,8 @@ def subpixel_centroid_trace(data, tracedata, width=5, dumpfile=None):
     
 def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None,
                       fine_centroiding=False,
-                      centroiding_width=5):
+                      centroiding_width=5,
+                      linetrace_hdulist=None):
 
     logger = logging.getLogger("TraceSlgLine")
 
@@ -335,6 +340,10 @@ def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None,
 
     # if (not ds9_region_file == None): ds9_region.close()
 
+    #
+    # create a debug file for all line-traces combined
+    #
+
     if (fine_centroiding):
         logger.debug("Done with tracing, starting fine centroiding")
         #print all_row_data.shape
@@ -348,13 +357,18 @@ def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None,
         # line_cutout = fitsdata[traced_y_pos, x1:x2]
         # print line_cutout.shape
 
+        imghdu = pyfits.ImageHDU()
         fine_pos = subpixel_centroid_trace(data=fitsdata.T, tracedata=all_row_data, width=10, 
-                                           dumpfile="linetrace_%d.fits" % (line_idx))
+                                           dumpfile=imghdu,
+                                           )#"linetrace_%d.fits" % (line_idx))
+        if (not linetrace_hdulist == None):
+            linetrace_hdulist.append(imghdu)
         #pyfits.PrimaryHDU(data=rectified).writeto("linetrace_%d.fits" % (line_idx), clobber=True)
         
     else:
         fine_pos = all_row_data[:,1]
 
+    
     if (createdebugfiles):
         with open("linetrace_idx.%d" % (line_idx), "w") as lt_file:
             logger.debug("Writing linetrace to %s" % ("linetrace_idx.%d" % (line_idx)))
@@ -362,7 +376,9 @@ def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None,
             print >>lt_file, "\n\n\n\n\n"
 
             # Now replace the coarse x-position with the new, fine positions
+            # all_row_data[:,1] = fine_pos[:] # XXX
             numpy.savetxt(lt_file, all_row_data)
+
     else:
         all_row_data[:,1] = fine_pos[:]
 
@@ -541,10 +557,10 @@ def compute_2d_wavelength_solution(arc_filename,
     #
     # Also eliminate all lines with nearby companions that might cause problems
     #
-    print "\n**********"*7
-    print wls_data['linelist_arc']
-    print "\n**********"*7
-    time.sleep(2)
+    #print "\n**********"*7
+    #print wls_data['linelist_arc']
+    #print "\n**********"*7
+    #time.sleep(2)
 
     if (n_lines_to_trace == 0):
         # if 0, use all lines
@@ -567,14 +583,17 @@ def compute_2d_wavelength_solution(arc_filename,
 
     traces = None
     logger.info("Preparing to trace %d lines" % (len(trace_line_indices)))
-    print trace_line_indices
-    print "XXX"
+    #print trace_line_indices
+    #print "XXX"
+
+    linetrace_hdulist = [pyfits.PrimaryHDU()]
 
     for i in trace_line_indices: #range(n_lines_to_trace):
         linetrace = trace_single_line(fitsdata_gf, wls_data, i,
                                       ds9_region_file=arc_region_file,
                                       fine_centroiding=True,
-                                      centroiding_width=10)
+                                      centroiding_width=10,
+                                      linetrace_hdulist=linetrace_hdulist)
         # linetrace = trace_single_line(fitsdata_gf, wls_data, sort_sn[i],
         #                    ds9_region_file=arc_region_file)
         # print linetrace.shape
@@ -583,6 +602,12 @@ def compute_2d_wavelength_solution(arc_filename,
         traces = linetrace if traces == None else \
                  numpy.append(traces, linetrace, axis=0)
         #traces.append(linetrace)
+
+    linetrace_fitsfile = "linetraces.fits"
+    linetrace_hdulist = pyfits.HDUList(linetrace_hdulist)
+    #clobberfile(linetrace_fitsfile)
+    linetrace_hdulist.writeto(linetrace_fitsfile, clobber=True)
+
 
     traces_2d = numpy.array(traces)
 
