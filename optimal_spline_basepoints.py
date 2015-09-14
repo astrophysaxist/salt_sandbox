@@ -13,14 +13,23 @@ import skyline_intensity
 
 def satisfy_schoenberg_whitney(data, basepoints, k=3):
 
+    logger = logging.getLogger("SchoenbergWhitney")
+
+    logger.debug("Starting with %d basepoints" % (basepoints.shape[0]))
+
     delete = numpy.isnan(basepoints)
     for idx in range(basepoints.shape[0]-1):
         # count how many data points are between this and the next basepoint
         in_range = (data > basepoints[idx]) & (data < basepoints[idx+1])
         count = numpy.sum(in_range)
-        if (count < k):
+        if (count <= k):
             # delete this basepoint
             delete[idx] = True
+            logger.debug("BP % 5d: Deleting basepoint @ %.5f (idx, %d data points, < %d)" % (
+                idx, basepoints[idx], count, k))
+
+    logger.debug("Deleting %d basepoints, left with %d" % (
+        numpy.sum(delete), basepoints.shape[0]-numpy.sum(delete)))
 
     return basepoints[~delete]
 
@@ -44,6 +53,8 @@ def optimal_sky_subtraction(obj_hdulist,
     obj_rms  = obj_hdulist['VAR'].data
     obj_bpm  = obj_hdulist['BPM'].data.flatten()
 
+    obj_hdulist.writeto("XXX.fits", clobber=True)
+
     try:
         obj_spatial = obj_hdulist['SPATIAL'].data
     except:
@@ -56,7 +67,7 @@ def optimal_sky_subtraction(obj_hdulist,
     obj_cube[:,:,1] = obj_data[:,:]
     obj_cube[:,:,2] = obj_rms[:,:]
     obj_cube[:,:,3] = obj_spatial[:,:]
-    
+
     if (not type(skyline_flat) == type(None)):
         # We also received a skyline flatfield for field flattening
         obj_cube[:,:,1] /= skyline_flat.reshape((-1,1))
@@ -76,24 +87,26 @@ def optimal_sky_subtraction(obj_hdulist,
     #
     if (not type(sky_regions) == type(None) and
         type(sky_regions) == numpy.ndarray):
-        
+
         logger.info("Selecting sky-pixels from user-defined regions")
-        is_sky = numpy.ones((obj_cube.shape[0]), dtype=numpy.bool)
+        is_sky = numpy.zeros((obj_cube.shape[0]), dtype=numpy.bool)
         for idx, sky_region in enumerate(sky_regions):
+            logger.debug("Good region: %d ... %d" % (sky_region[0], sky_region[1]))
             in_region = (obj_cube[:,3] > sky_region[0]) & (obj_cube[:,3] < sky_region[1])
             is_sky[in_region] = True
 
         obj_cube = obj_cube[is_sky]
 
-        
+
     allskies = obj_cube[::skiplength]
+    numpy.savetxt("xxx1", allskies)
 
     _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
                          header=obj_hdulist['SCI.RAW'].header)
     _x.name = "STEP1"
     obj_hdulist.append(_x)
 
-    
+
 
     # #
     # # Load and prepare data
@@ -103,6 +116,7 @@ def optimal_sky_subtraction(obj_hdulist,
     # just to be on the safe side, sort allskies by wavelength
     sky_sort_wl = numpy.argsort(allskies[:,0])
     allskies = allskies[sky_sort_wl]
+    numpy.savetxt("xxx2", allskies)
 
     logger.debug("Working on %7d data points" % (allskies.shape[0]))
 
@@ -136,12 +150,15 @@ def optimal_sky_subtraction(obj_hdulist,
         kind='nearest',
         #assume_sorted=True,
         )
-    
+
+    logger.debug("Cumulative flux range: %f ... %f" % (
+        allskies_cumulative[0], allskies_cumulative[1]))
+
     # now create the raw basepoints in cumulative flux space
     k_cumflux = numpy.linspace(allskies_cumulative[0],
                                allskies_cumulative[-1],
                                N_points+2)[1:-1]
-    
+
     # and using the interpolator, convert flux space into wavelength
     k_wl = interp(k_cumflux)
 
@@ -160,6 +177,7 @@ def optimal_sky_subtraction(obj_hdulist,
     #############################################################################
 
     wl_min, wl_max = numpy.min(allskies[:,0]), numpy.max(allskies[:,0])
+    logger.debug("Min/Max WL: %.3f / %.3f" % (wl_min, wl_max))
 
     if (compare):
         logger.info("Computing spline using original/simple sampling")
@@ -180,7 +198,15 @@ def optimal_sky_subtraction(obj_hdulist,
                       )
 
     logger.info("Computing spline using optimized sampling")
+    logger.debug("#datapoints: %d, #basepoints: %d" % (
+        allskies.shape[0], k_wl.shape[0]))
+
     k_opt_good = satisfy_schoenberg_whitney(allskies[:,0], k_wl, k=3)
+
+    numpy.savetxt("allskies", allskies)
+    numpy.savetxt("bp_in", k_wl)
+    numpy.savetxt("bp_out", k_opt_good)
+
     spline_opt = scipy.interpolate.LSQUnivariateSpline(
         x=allskies[:,0], 
         y=allskies[:,1], 
@@ -211,7 +237,7 @@ def optimal_sky_subtraction(obj_hdulist,
             line = obj_wl.shape[0]/2
             wl = obj_wl[line,:]
             spec = spline_opt(wl)
-            
+
             return spec
 
 
@@ -249,7 +275,7 @@ def optimal_sky_subtraction(obj_hdulist,
                                    spline_iter(k_wl).reshape((-1,1)),
                                    axis=1)
                   )
-        
+
         # compute spline fit for each wavelength data point
         dflux = good_data[:,1] - spline_iter(good_data[:,0])
         print dflux
@@ -267,7 +293,7 @@ def optimal_sky_subtraction(obj_hdulist,
         d, i = wl_tree.query(k_wl.reshape((-1,1)),
                              k=100, # use 100 neighbors
                              distance_upper_bound=avg_sample_width)
-        
+
         # make sure to flag outliers
         bad = (i >= dflux.shape[0])
         i[bad] = 0
@@ -284,7 +310,7 @@ def optimal_sky_subtraction(obj_hdulist,
         numpy.savetxt("fit_variance.iter_%d" % (iteration+1),
                       numpy.append(k_wl.reshape((-1,1)),
                                    var.reshape((-1,1)), axis=1))
-        
+
         #
         # Now interpolate this scatter linearly to the position of each 
         # datapoint in the original dataset. That way we can easily decide, 
@@ -362,7 +388,7 @@ def optimal_sky_subtraction(obj_hdulist,
         obj_hdulist.append(ss_hdu2)
 
 
-    return sky2d, spline_iter
+        return sky2d, spline_iter
 
 
 
