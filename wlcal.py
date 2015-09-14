@@ -726,7 +726,7 @@ def find_wavelength_solution(filename, line):
     #
     in_range = (lines[:,0] > numpy.min(wl)) & (lines[:,0] < numpy.max(wl))
     ref_lines = lines[in_range]
-    logger.info("Found these lines for fitting:\n%s" % (
+    logger.debug("Found these lines for fitting:\n%s" % (
             "\n".join(["%10.4f" % l for l in ref_lines[:,0]])))
     #print ref_lines
 
@@ -806,18 +806,18 @@ def find_wavelength_solution(filename, line):
 
     most_matches = numpy.unravel_index(numpy.argmax(results), results.shape)
 
-    print "best results: %d matches for camangle=%.3f (%.3f), gratingangle=%.3f (%.3f)" % (
+    logger.info("best results: %d matches for camangle=%.3f (%.3f), gratingangle=%.3f (%.3f)" % (
         results[most_matches], 
         try_camangles[most_matches[0]], hdulist[0].header['CAMANG'],
         try_gratingangles[most_matches[1]], hdulist[0].header['GR-ANGLE'],
-    )
+    ))
     best_camangle = try_camangles[most_matches[0]]
     best_gratingangle = try_gratingangles[most_matches[1]]
 
     #
     # Now write the complete spectrum with the wavelength calibration
     #
-    print spec.shape
+    #print spec.shape
 
     kens_model.compute(artic=best_camangle, grang=best_gratingangle, ncols=spec.shape[0])
     spec_wl = kens_model.get_wavelength_list()
@@ -847,31 +847,31 @@ def find_wavelength_solution(filename, line):
         distance_upper_bound=matching_radius)
     good_matches = i < ref_lines.shape[0]
 
-    print "\n-------------"*5
-    print nearest_neighbor.shape
-    print nearest_neighbor
-    print i.shape
-    print i
-    print good_matches
-    print lineinfo.shape
-    print ref_lines.shape
-    print numpy.sum(good_matches)
+    # print "\n-------------"*5
+    # print nearest_neighbor.shape
+    # print nearest_neighbor
+    # print i.shape
+    # print i
+    # print good_matches
+    # print lineinfo.shape
+    # print ref_lines.shape
+    # print numpy.sum(good_matches)
 
     n_matches = numpy.sum(good_matches)
 
     # matched_ref = ref_lines[:,0][good_matches]
     # matched_line_idx = i[good_matches]
     
-    print "============"
+    # print "============"
     matched_catalog = numpy.zeros((n_matches, lineinfo.shape[1]+ref_lines.shape[1]))
-    print matched_catalog.shape
+    # print matched_catalog.shape
     
     matched_catalog[:,:lineinfo.shape[1]] = lineinfo[good_matches]
     matched_catalog[:,lineinfo.shape[1]:] = ref_lines[i[good_matches]]
 
     numpy.savetxt("matched_lines.dat", matched_catalog)
 
-    print "xxxxxxxxxxxxx"
+    # print "xxxxxxxxxxxxx"
 
     def fit__wavelength(p_fit, line_x, rssmodel):
         computed_wl = rssmodel.compute(
@@ -894,8 +894,12 @@ def find_wavelength_solution(filename, line):
                                   maxfev=500,
                                   full_output=1)
     p_final = _fit[0]
-
-    print p_start, " ==> ", p_final
+    logger.info("Fit results: Was: %s --> Now: %s" % (
+        " ".join(["%.4f" % f for f in p_start]),
+        " ".join(["%.4f" % f for f in p_final]),
+        ))
+    
+    # print p_start, " ==> ", p_final
 
     lineinfo[:,lineinfo_colidx['WAVELENGTH']] = fit__wavelength(
         p_final, lineinfo[:, lineinfo_colidx["PIXELPOS"]], kens_model)
@@ -909,10 +913,11 @@ def find_wavelength_solution(filename, line):
     #
     rms = numpy.std(matched_catalog[:, lineinfo_colidx['WAVELENGTH']] - \
                     matched_catalog[:, len(lineinfo_cols)])
-    print "Found RMS:", rms
+    logger.info("Found RMS: %f" % (rms))
 
     wls = compute_wavelength_solution(matched_catalog, max_order=3)
-    print wls
+    logger.info("Best fit wavelength solution: L = %9.3f %+9.3f * x %+9.3e x^2 %+9.3e x^3" % (
+        wls[0], wls[1], wls[2], wls[3]))
 
 
     # # # set the indices for bad matches to a valid value
