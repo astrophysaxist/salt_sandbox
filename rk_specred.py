@@ -26,7 +26,9 @@ numpy.seterr(divide='ignore', invalid='ignore')
 # Disable nasty and useless RankWarning when spline fitting
 import warnings
 warnings.simplefilter('ignore', numpy.RankWarning)
-
+warnings.simplefilter('ignore', pyfits.PyfitsDeprecationWarning)
+warnings.simplefilter('ignore', FutureWarning)
+warnings.simplefilter('ignore', UserWarning)
 # sys.path.insert(1, "/work/pysalt/")
 # sys.path.insert(1, "/work/pysalt/plugins")
 # sys.path.insert(1, "/work/pysalt/proptools")
@@ -74,6 +76,8 @@ from helpers import *
 import wlcal
 import traceline
 import skysub2d
+import optimal_spline_basepoints as optimalskysub
+import skyline_intensity
 
 wlmap_fitorder = [2,2]
 
@@ -618,7 +622,7 @@ def specred(rawdir, prodir,
             arc_region_file = "ARC_m_%s_traces.reg" % (fb[:-5])
             wls_2darc = traceline.compute_2d_wavelength_solution(
                 arc_filename=hdu_mosaiced, 
-                n_lines_to_trace=-50, # trace all lines with S/N > 50 
+                n_lines_to_trace=-15, #-50, # trace all lines with S/N > 50 
                 fit_order=wlmap_fitorder,
                 output_wavelength_image="wl+image.fits",
                 debug=False,
@@ -675,11 +679,13 @@ def specred(rawdir, prodir,
     # Now apply wavelength solution found above to your data frames
     #
     #############################################################################
-    logger.info("Applying wavelength solution to OBJECT frames")
+    logger.info("\n\n\nApplying wavelength solution to OBJECT frames")
     arcinfos = {}
     for idx, filename in enumerate(obslog['OBJECT']):
         _, fb = os.path.split(filename)
+        _fb, _ = os.path.splitext(fb)
         hdulist = pyfits.open(filename)
+        logger = logging.getLogger("OBJ(%s)" % _fb)
 
         binx, biny = pysalt.get_binning(hdulist)
         logger.info("Using binning of %d x %d (spectral/spatial)" % (binx, biny))
@@ -766,6 +772,7 @@ def specred(rawdir, prodir,
         #
         # Now go ahead and extract the full 2-d sky
         #
+        logger.info("Extracting 2-D sky")
         sky_regions = numpy.array([[0, hdu['SCI'].data.shape[0]]])
         sky2d = skysub2d.make_2d_skyspectrum(
             hdu,
@@ -775,6 +782,7 @@ def specred(rawdir, prodir,
             slitprofile=slitprofile,
             )
 
+        logger.info("Performing sky subtraction")
         sky_hdu = pyfits.ImageHDU(data=sky2d)
         sky_hdu.name = "SKY"
         hdu.append(sky_hdu)
@@ -790,9 +798,43 @@ def specred(rawdir, prodir,
         numpy.savetxt("OBJ_%s_slit.asc" % (fb[:-5]), slitprofile)
 
         #
+        # Compute the optimized sky, using better-chosen spline basepoints 
+        # to sample the sky-spectrum
+        #
+        sky_regions = numpy.array([[300,500], [1400,1700]])
+        logger.info("Preparing optimized sky-subtraction")
+        ia = None
+
+        # simple_spec = optimalskysub.optimal_sky_subtraction(hdu, 
+        #                                       sky_regions=sky_regions,
+        #                                       N_points=1000,
+        #                                       iterate=False,
+        #                                       skiplength=10, 
+        #                                       return_2d=False)
+        # numpy.savetxt("%s.simple_spec" % (_fb), simple_spec)
+
+        # simple_spec = hdu['VAR'].data[hdu['VAR'].data.shape[0]/2,:]
+        # numpy.savetxt("%s.simple_spec_2" % (_fb), simple_spec)
+
+        # logger.info("Searching for and analysing sky-lines")
+        # skyline_list = wlcal.find_list_of_lines(simple_spec, readnoise=1, avg_width=1)
+        # print skyline_list
+
+        # logger.info("Creating spatial flatfield from sky-line intensity profiles")
+        # i, ia, im = skyline_intensity.find_skyline_profiles(hdu, skyline_list)
+    
+        sky_2d, spline = optimalskysub.optimal_sky_subtraction(hdu, 
+                                                 sky_regions=sky_regions,
+                                                 N_points=10000,
+                                                 iterate=False,
+                                                 skiplength=5,
+                                                 skyline_flat=ia)
+
+        #
         # And finally write reduced frame back to disk
         #
         out_filename = "OBJ_%s" % (fb)
+        logger.info("Saving output to %s" % (out_filename))
         pysalt.clobberfile(out_filename)
         hdu.writeto(out_filename, clobber=True)
 
