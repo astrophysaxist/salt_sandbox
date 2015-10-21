@@ -539,8 +539,10 @@ def specred(rawdir, prodir,
     # Go through the list of files, find all flat-fields, and create a master flat field
     #
     logger.info("Creating a master flat-field frame")
+    flatfield_filenames = []
+    flatfield_hdus = []
     for idx, filename in enumerate(obslog['FLAT']):
-        hdulist = open(filename)
+        hdulist = pyfits.open(filename)
         if (hdulist[0].header['OBSTYPE'].find("FLAT") >= 0 and
             hdulist[0].header['INSTRUME'] == "RSS"):
             #
