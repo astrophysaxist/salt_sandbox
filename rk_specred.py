@@ -628,7 +628,9 @@ def specred(rawdir, prodir,
                 fit_order=wlmap_fitorder,
                 output_wavelength_image="wl+image.fits",
                 debug=False,
-                arc_region_file=arc_region_file)
+                arc_region_file=arc_region_file,
+                trace_every=0.05,
+                )
             wl_hdu = pyfits.ImageHDU(data=wls_2darc)
             wl_hdu.name = "WAVELENGTH"
             hdu_mosaiced.append(wl_hdu)
