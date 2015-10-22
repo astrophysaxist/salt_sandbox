@@ -463,7 +463,161 @@ def polyval2d(x, y, m_order):
 
 
 
+def pick_line_every_separation(
+        arc_linelist,
+        trace_every, min_line_separation,
+        n_pixels,
+        min_signal_to_noise=10,
+):
 
+    pickable_lines = numpy.array([])
+
+    #
+    # Convert all potentially fractional values to pixel coordinates
+    #
+    if (trace_every < 1):
+        trace_every *= n_pixels
+    if (min_line_separation < 1):
+        min_line_separation *= n_pixels
+
+    #
+    # Add a unique line identifier to all lines
+    #
+    linelist = numpy.append(
+        arc_linelist,
+        numpy.arange(arc_linelist.shape[0]).reshape((-1,1)),
+        axis=1)
+    numpy.savetxt("pick_input", linelist)
+
+    # 
+    # Now go through each interval, and select all lines that
+    # - are strong enough to fulfill the S/N criteria
+    # - or the strongest line in this interval
+    # - and at least min_separation away from other lines in this interval
+    #
+    left_edge = 0
+    right_edge = left_edge + trace_every
+    while (right_edge < n_pixels):
+
+        #
+        # Find all strong lines in interval 
+        # 
+        in_window = \
+            (linelist[:, wlcal.lineinfo_colidx['PIXELPOS']] >= left_edge) & \
+            (linelist[:, wlcal.lineinfo_colidx['PIXELPOS']] <= right_edge)
+        line_candidates = linelist[in_window]
+
+        if (numpy.sum(in_window) <= 0):
+            # No lines found in window
+            right_edge += trace_every
+            continue
+
+        print
+        print "Found these lines between", left_edge,"and",right_edge,":"
+        print line_candidates[:, wlcal.lineinfo_colidx['PIXELPOS']]
+        print "line-IDs:", line_candidates[:, -1]
+
+        strong_line =  line_candidates[:, wlcal.lineinfo_colidx['S2N']] > min_signal_to_noise
+            
+        if (numpy.sum(strong_line) <= 0):
+            # No strong lines found
+            # pick the strongest line we could find
+            strong_line = [numpy.argmax(line_candidates[:, wlcal.lineinfo_colidx['S2N']])]
+            print "Picking the strongest line locally: ID=", strong_line, "pxX=", line_candidates[strong_line, wlcal.lineinfo_colidx['PIXELPOS']]
+
+            
+        # IDs for good lines in this part of the spectrum
+        good_lines = line_candidates[strong_line,-1]
+        print "good line IDs:", good_lines
+        print "line positions:", line_candidates[strong_line, wlcal.lineinfo_colidx['PIXELPOS']]
+
+        selected_lines = line_candidates[strong_line]
+        print "\nsel. lines:", selected_lines
+
+        left_edge = numpy.max(selected_lines[:, wlcal.lineinfo_colidx['PIXELPOS']]) + min_line_separation
+        right_edge = left_edge + trace_every
+        print "\nNew left edge:", left_edge
+        #print "Searching between", left_edge,"and",right_edge
+
+        pickable_lines = numpy.append(pickable_lines, selected_lines[:,-1])
+
+    print "\n=========="*5
+
+    pickable_lines = pickable_lines.astype(numpy.int)
+
+    print pickable_lines
+    numpy.savetxt(sys.stdout, linelist[pickable_lines], " %8.2f")
+
+    numpy.savetxt("pickable", linelist[pickable_lines], " %8.2f")
+
+    #
+    # Now weed out the lines that are too close to other lines, eliminating 
+    # the weaker ones first
+    #
+    cands = linelist[pickable_lines]
+    #s2n = final_candidates[:, wlcal.lineinfo_colidx['S2N']]
+    #print s2n
+    #s2n_sort = numpy.argsort(final_candidates[:, wlcal.lineinfo_colidx['S2N']])
+    #final_sorted = final_candidates[s2n_sort]
+
+    #print final_sorted[:, wlcal.lineinfo_colidx['S2N']]
+    
+    # lines_to_delete = True
+    # while (lines_to_delete):
+    #     x = cands[:, wlcal.lineinfo_colidx['S2N']]
+    #     spacing = x.reshape((-1,1)) - x.reshape((1, -1)) #cands[:, wlcal.lineinfo_colidx['S2N']]cands[:, wlcal.lineinfo_colidx['S2N']] - cands[:, wlcal.lineinfo_colidx['S2N']].T
+    #     print spacing 
+    #     break
+
+    
+    final_indices = numpy.array([], dtype=numpy.int)
+    while (cands.shape[0] > 0):
+        xpos_tree = scipy.spatial.cKDTree(cands[:, wlcal.lineinfo_colidx['PIXELPOS']].reshape((-1,1)))
+        d,i = xpos_tree.query(cands[:, wlcal.lineinfo_colidx['PIXELPOS']].reshape((-1,1)),
+                              k=100,
+                              distance_upper_bound=min_line_separation)
+
+        # Select all lines with only 1 match (themselves). These are keepers
+        count = numpy.sum(numpy.isfinite(d), axis=1)
+        print count.shape
+        print count
+
+        # For all other lines, eliminate the least significant line in the 
+        # close vicinity and try again
+
+        keepers = (count == 1)
+        print cands[keepers, -1]
+        final_indices = numpy.append(final_indices, cands[keepers, -1])
+
+        
+        print "BEFORE:", cands.shape
+        # numpy.delete(cands, keepers)
+        cands = cands[~keepers]
+        print "AFTER:", cands.shape
+        print count[~keepers]
+
+        if (cands.shape[0] <= 1):
+            # No lines left, so nothing left to eliminate
+            break
+
+        #
+        # Find the weakest line
+        #
+        weakest = numpy.argmin(cands[:, wlcal.lineinfo_colidx['S2N']])
+        # sel_strong = numpy.ones(cands.shape[0], dtype=numpy.bool)
+        # sel_strong[weakest] = False
+        cands = numpy.delete(cands, weakest, axis=0)
+        print "AFTER #2:", cands.shape
+
+        # print d.shape, d
+        # print i.shape, i
+        # break
+
+    print final_indices.shape
+    print final_indices
+
+    numpy.savetxt("picked_final", linelist[final_indices.astype(numpy.int)], " %8.2f")
+    return final_indices.astype(numpy.int)
 
 
 def compute_2d_wavelength_solution(arc_filename, 
@@ -472,7 +626,9 @@ def compute_2d_wavelength_solution(arc_filename,
                                    output_wavelength_image=None,
                                    debug=False,
                                    arc_region_file=None,
-                                   return_slitprofile=False):
+                                   return_slitprofile=False,
+                                   trace_every=None,
+                                   min_line_separation=0.03):
 
     if (type(arc_filename) == str and os.path.isfile(arc_filename)):
         # We received a filename as parameter
@@ -562,19 +718,31 @@ def compute_2d_wavelength_solution(arc_filename,
     #print "\n**********"*7
     #time.sleep(2)
 
-    if (n_lines_to_trace == 0):
-        # if 0, use all lines
-        trace_line_indices = range(wls_data['linelist_arc'].shape[0])
+    
+    if (not trace_every == None):
 
-    elif (n_lines_to_trace > 0):
-        # if N positive, use the N strongest lines
-        sort_sn = numpy.argsort(wls_data['linelist_arc'][:,wlcal.lineinfo_colidx['S2N']])[::-1]
-        trace_line_indices = sort_sn[:n_lines_to_trace]
+        pickle.dump(wls_data['linelist_arc'], open("arclist", "wb"))
+        # print "exiting"
+        # sys.exit(0)
+        trace_line_indices = pick_line_every_separation(
+            wls_data['linelist_arc'],
+            trace_every, min_line_separation,
+            hdulist['SCI'].data.shape[1]
+            )
+    else:
+        if (n_lines_to_trace == 0):
+            # if 0, use all lines
+            trace_line_indices = range(wls_data['linelist_arc'].shape[0])
 
-    else: 
-        # if N negative, use the absolute value of N as S/N cutoff
-        strong_enough = wls_data['linelist_arc'][:,wlcal.lineinfo_colidx['S2N']] > math.fabs(n_lines_to_trace)
-        trace_line_indices = numpy.arange(wls_data['linelist_arc'].shape[0])[strong_enough]
+        elif (n_lines_to_trace > 0):
+            # if N positive, use the N strongest lines
+            sort_sn = numpy.argsort(wls_data['linelist_arc'][:,wlcal.lineinfo_colidx['S2N']])[::-1]
+            trace_line_indices = sort_sn[:n_lines_to_trace]
+
+        else: 
+            # if N negative, use the absolute value of N as S/N cutoff
+            strong_enough = wls_data['linelist_arc'][:,wlcal.lineinfo_colidx['S2N']] > math.fabs(n_lines_to_trace)
+            trace_line_indices = numpy.arange(wls_data['linelist_arc'].shape[0])[strong_enough]
 
 
     # Reset ds9_arc
