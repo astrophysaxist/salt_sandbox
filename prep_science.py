@@ -8,83 +8,120 @@ from optimal_spline_basepoints import satisfy_schoenberg_whitney
 import bottleneck
 import logging
 
-def fit_spline_to_noisy_data(data_x, data_y, 
-                             k_basepoints,
+def compute_smoothed_profile(data_x, data_y, 
                              n_iterations=3,
+                             n_max_neighbors=100, # pixels
+                             avg_sample_width=50, # pixels
+                             n_sigma=3,
 ):
 
     logger = logging.getLogger("FitSplineToNoisyData")
 
     valid = numpy.isfinite(data_x) & numpy.isfinite(data_y)
-    data_x = data_x[valid]
-    data_y = data_y[valid]
+    if (numpy.sum(valid) < data.shape[0]):
+        # there is at least one NaN that we need to replace
+        
+        #data_x = data_x[valid]
+        data_y[~valid] = -1e9 # = data_y[valid]
 
     wl_min, wl_max = numpy.min(data_x), numpy.max(data_x)
-    avg_sample_width = (wl_max - wl_min) / k_basepoints.shape[0] * 2
+    #avg_sample_width = (wl_max - wl_min) / k_basepoints.shape[0] * 2
 
     weights = numpy.ones(data_x.shape)
 
-    #good_data = 
+
     for iteration in range(n_iterations):
-
-        # compute spline
-        k_iter_good = satisfy_schoenberg_whitney(data_x, k_basepoints, k=3)
-
-        spline_iter = scipy.interpolate.LSQUnivariateSpline(
-            x=data_x, #allskies[:,0],#[good_point], 
-            y=data_y, #allskies[:,1],#[good_point], 
-            t=k_iter_good, #k_basepoints,
-            w=None, #weights, #None, # no weights (for now)
-            bbox=[wl_min, wl_max], 
-            k=3, # use a cubic spline fit
-            )
-        numpy.savetxt("spline_opt.iter%d" % (iteration+1), 
-                      numpy.append(k_basepoints.reshape((-1,1)),
-                                   spline_iter(k_basepoints).reshape((-1,1)),
-                                   axis=1)
-                  )
-
-        # compute spline fit for each wavelength data point
-        dflux = data_y - spline_iter(data_x)
-        print dflux
-
-        numpy.savetxt("dflux_%d" % (iteration),
-                      numpy.append(data_x.reshape((-1,1)),
-                                   dflux.reshape((-1,1)), axis=1),
-        )
-
-
-
-        # #
-        # # Add here: work out the scatter of the distribution of pixels in the 
-        # #           vicinity of this basepoint. This is what determined outlier 
-        # #           or not, and NOT the uncertainty in a given pixel
-        # #
 
         # Create a KD-tree with all data points
         wl_tree = scipy.spatial.cKDTree(data_x.reshape((-1,1)))
 
         # Now search this tree for points near each of the spline base points
-        d, i = wl_tree.query(k_basepoints.reshape((-1,1)),
+        d, i = wl_tree.query(data_x.reshape((-1,1)),
                              k=100, # use 100 neighbors
                              distance_upper_bound=avg_sample_width)
 
-        # make sure to flag outliers
-        bad = (i >= dflux.shape[0])
+        #
+        # Compute standard deviation around every pixel
+        #
+        bad = (i >= data_x.shape[0])
         i[bad] = 0
 
         # Now we have all indices of a bunch of nearby datapoints, so we can 
         # extract how far off each of the data points is
-        delta_flux_2d = data_x[i] #dflux[i]
-        delta_flux_2d[bad] = numpy.NaN
-        print "dflux_2d = ", delta_flux_2d.shape
+        neighbors = data_y[i] #dflux[i]
+        neighbors[bad] = numpy.NaN
+        #print "dflux_2d = ", delta_flux_2d.shape
 
         # With this we can estimate the scatter around each spline fit basepoint
-        var = bottleneck.nanstd(delta_flux_2d, axis=1)
-        print "variance:", var.shape
+        local_var = bottleneck.nanstd(neighbors, axis=1)
+        print "variance:", local_var.shape
         numpy.savetxt("fit_variance.iter_%d" % (iteration+1),
-                      numpy.append(k_basepoints.reshape((-1,1)),
-                                   var.reshape((-1,1)), axis=1))
+                      numpy.append(data_x.reshape((-1,1)),
+                                   local_var.reshape((-1,1)), axis=1))
+
+        local_median = bottleneck.nanmedian(neighbors, axis=1)
+        numpy.savetxt("fit_median.iter_%d" % (iteration+1),
+                      numpy.append(data_x.reshape((-1,1)),
+                                   local_median.reshape((-1,1)), axis=1))
+
+        #
+        # Now reject all pixels outside the 2-3 sigma range of the local scatter
+        #
+        outliers = (data_y > local_median+n_sigma*local_var) | \
+                   (data_y < local_median-n_sigma*local_var)
+        data_y[outliers] = numpy.NaN
+
+        # # compute spline
+        # k_iter_good = satisfy_schoenberg_whitney(data_x, k_basepoints, k=3)
+
+        # spline_iter = scipy.interpolate.LSQUnivariateSpline(
+        #     x=data_x, #allskies[:,0],#[good_point], 
+        #     y=data_y, #allskies[:,1],#[good_point], 
+        #     t=k_iter_good, #k_basepoints,
+        #     w=None, #weights, #None, # no weights (for now)
+        #     bbox=[wl_min, wl_max], 
+        #     k=3, # use a cubic spline fit
+        #     )
+        # numpy.savetxt("spline_opt.iter%d" % (iteration+1), 
+        #               numpy.append(k_basepoints.reshape((-1,1)),
+        #                            spline_iter(k_basepoints).reshape((-1,1)),
+        #                            axis=1)
+        #           )
+
+        # # compute spline fit for each wavelength data point
+        # dflux = data_y - spline_iter(data_x)
+        # print dflux
+
+        # numpy.savetxt("dflux_%d" % (iteration),
+        #               numpy.append(data_x.reshape((-1,1)),
+        #                            dflux.reshape((-1,1)), axis=1),
+        # )
+
+
+
+        # # #
+        # # # Add here: work out the scatter of the distribution of pixels in the 
+        # # #           vicinity of this basepoint. This is what determined outlier 
+        # # #           or not, and NOT the uncertainty in a given pixel
+        # # #
+
+
+        # # make sure to flag outliers
+        # bad = (i >= dflux.shape[0])
+        # i[bad] = 0
+
+        # # Now we have all indices of a bunch of nearby datapoints, so we can 
+        # # extract how far off each of the data points is
+        # delta_flux_2d = data_x[i] #dflux[i]
+        # delta_flux_2d[bad] = numpy.NaN
+        # print "dflux_2d = ", delta_flux_2d.shape
+
+        # # With this we can estimate the scatter around each spline fit basepoint
+        # var = bottleneck.nanstd(delta_flux_2d, axis=1)
+        # print "variance:", var.shape
+        # numpy.savetxt("fit_variance.iter_%d" % (iteration+1),
+        #               numpy.append(k_basepoints.reshape((-1,1)),
+        #                            var.reshape((-1,1)), axis=1))
 
         # #
         # # Now interpolate this scatter linearly to the position of each 
@@ -119,11 +156,13 @@ def fit_spline_to_noisy_data(data_x, data_y,
 
         # # logger.info("Done with iteration %d (%d pixels left)" % (iteration+1, good_data.shape[0]))
 
-    return spline_iter
+    return local_median
 
 
 
-if (False):
+#if (False):
+if __name__ == "__main__":
+
     filename = sys.argv[1]
     hdulist = pyfits.open(filename)
 
@@ -181,7 +220,7 @@ if (False):
     numpy.savetxt("skylines.blkavg", blkavg)
     numpy.savetxt("skylines.blkmedian", blkmedian)
 
-else:
+#else:
 
     weighted_avg = numpy.loadtxt("skylines.weightedavg")
     blkavg = numpy.loadtxt("skylines.blkavg")
@@ -195,15 +234,28 @@ else:
     
 
     data_x = numpy.arange(weighted_avg.shape[0])
-    spline = fit_spline_to_noisy_data(data_x=data_x, 
-                             data_y=weighted_avg, 
-                             k_basepoints=k_basepoints,
-                             n_iterations=3,
-                             )
+    intensity_profile = compute_smoothed_profile(data_x=data_x, 
+                                                data_y=weighted_avg, 
+                                                n_iterations=3,
+                                            )
+    numpy.savetxt("intensity_profile", intensity_profile)
 
+    # Make sure we deal with very small and/or negative numbers appropriately
+    intensity_profile[intensity_profile < 1e-3] = 1e-3
+    numpy.savetxt("intensity_profile_v2", intensity_profile)
+
+    #
+    # Now we have the full-resolution skyline intensity profile,
+    # use it to correct the data
+    #
+    numpy.savetxt("intensity_profile", intensity_profile)
+    flat_skylines = skylines / intensity_profile.reshape((-1,1))
+    pyfits.PrimaryHDU(data=flat_skylines).writeto("flat_skylines.fits", clobber=True)
+
+    
     #
     # Return results
     #
-    spline_fit = spline(data_x)
-    numpy.savetxt("skylines.spline", spline_fit)
+    # spline_fit = spline(data_x)
+    # numpy.savetxt("skylines.spline", spline_fit)
 
