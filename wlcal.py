@@ -239,7 +239,7 @@ def extract_arc_spectrum(hdulist, line=None, avg_width=20):
 
 mm_to_A = 10e6
 
-def find_list_of_lines(spec, readnoise=2, avg_width=1):
+def find_list_of_lines(spec, readnoise=2, gain=1, avg_width=1, pre_smooth=None):
 
     """
 
@@ -295,9 +295,19 @@ def find_list_of_lines(spec, readnoise=2, avg_width=1):
     spec_nolines = numpy.array(spec)
     spec_nolines[~maybe_continuum] = numpy.NaN
     # now median_filter over the continuum
-    fw = 25
+    fw = 50
+
+    numpy.savetxt("spec_nolines", spec_nolines)
+
+    # add some padding to avoid querying non-existant data
+    padded = numpy.empty((spec_nolines.shape[0]+2*fw))
+    padded[:] = numpy.NaN
+    padded[fw:-fw] = spec_nolines
     continuum = numpy.array([
-        bottleneck.nanmedian(spec_nolines[i-fw:i+fw]) for i in range(spec_nolines.shape[0])])
+        bottleneck.nanmedian(padded[i-fw:i+fw]) for i in range(fw, spec_nolines.shape[0]+fw)])
+
+    # continuum = numpy.array([
+    #     bottleneck.nanmedian(spec_nolines[i-fw:i+fw]) for i in range(spec_nolines.shape[0])])
     continuum[numpy.isnan(continuum)] = 0.
     numpy.savetxt("continuum", continuum)
 
@@ -306,6 +316,13 @@ def find_list_of_lines(spec, readnoise=2, avg_width=1):
     # Definition of a peak: A value higher than the two neighboring values
     #
     logger.debug("Starting to search for lines")
+
+    if (pre_smooth > 0):
+        spec = scipy.ndimage.filters.gaussian_filter(
+            input=spec, sigma=pre_smooth, 
+            order=0, output=None, 
+            mode='constant', cval=0.0, truncate=3.0)
+        numpy.savetxt("spec_presmoothed", spec)
 
     peak = numpy.empty(spec.shape, dtype=numpy.bool)
     peak[:] = False
@@ -328,7 +345,11 @@ def find_list_of_lines(spec, readnoise=2, avg_width=1):
         x_pixels[peak].reshape((-1,1)), spec[peak].reshape((-1,1)), axis=1))
     
     # Now reject all peaks that are not significantly over the estimated background noise
-    continuum_noise = numpy.sqrt(continuum*readnoise*2*avg_width) / (2*avg_width)
+    # number of electrons from source/sky
+    continuum_noise = numpy.sqrt(
+        (spec*gain*avg_width) + (readnoise**2*avg_width)
+    ) / avg_width
+    #continuum_noise = numpy.sqrt(numpy.fabs(continuum*gain)+(readnoise**2*avg_width)) / (2*avg_width)
     numpy.savetxt("continuum_noise", continuum_noise)
 
     # require at least 3 sigma over background noise
