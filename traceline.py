@@ -470,6 +470,8 @@ def pick_line_every_separation(
         min_signal_to_noise=10,
 ):
 
+    logger = logging.getLogger("PickLines")
+
     pickable_lines = numpy.array([])
 
     #
@@ -487,7 +489,7 @@ def pick_line_every_separation(
         arc_linelist,
         numpy.arange(arc_linelist.shape[0]).reshape((-1,1)),
         axis=1)
-    numpy.savetxt("pick_input", linelist)
+    # numpy.savetxt("pick_input", linelist)
 
     # 
     # Now go through each interval, and select all lines that
@@ -512,63 +514,55 @@ def pick_line_every_separation(
             right_edge += trace_every
             continue
 
-        print
-        print "Found these lines between", left_edge,"and",right_edge,":"
-        print line_candidates[:, wlcal.lineinfo_colidx['PIXELPOS']]
-        print "line-IDs:", line_candidates[:, -1]
+        # print
+        # print "Found these lines between", left_edge,"and",right_edge,":"
+        # print line_candidates[:, wlcal.lineinfo_colidx['PIXELPOS']]
+        # print "line-IDs:", line_candidates[:, -1]
+        logger.debug("Found these lines between %d and %d:\n%s\nLine-IDs:\n%s" % (
+            left_edge, right_edge,
+            " ".join(["%.1f" % x for x in line_candidates[:, wlcal.lineinfo_colidx['PIXELPOS']]]),
+            " ".join(["%d" % i for i in line_candidates[:, -1]]),
+            ))
 
+        print line_candidates
         strong_line =  line_candidates[:, wlcal.lineinfo_colidx['S2N']] > min_signal_to_noise
             
         if (numpy.sum(strong_line) <= 0):
             # No strong lines found
             # pick the strongest line we could find
             strong_line = [numpy.argmax(line_candidates[:, wlcal.lineinfo_colidx['S2N']])]
-            print "Picking the strongest line locally: ID=", strong_line, "pxX=", line_candidates[strong_line, wlcal.lineinfo_colidx['PIXELPOS']]
+            logger.debug("Picking the strongest line locally: ID=%d pxX=%.1f" % (
+                strong_line, line_candidates[strong_line, wlcal.lineinfo_colidx['PIXELPOS']]))
 
             
         # IDs for good lines in this part of the spectrum
         good_lines = line_candidates[strong_line,-1]
-        print "good line IDs:", good_lines
-        print "line positions:", line_candidates[strong_line, wlcal.lineinfo_colidx['PIXELPOS']]
+        # print "good line IDs:", good_lines
+        # print "line positions:", line_candidates[strong_line, wlcal.lineinfo_colidx['PIXELPOS']]
 
         selected_lines = line_candidates[strong_line]
-        print "\nsel. lines:", selected_lines
+        # print "\nsel. lines:", selected_lines
 
         left_edge = numpy.max(selected_lines[:, wlcal.lineinfo_colidx['PIXELPOS']]) + min_line_separation
         right_edge = left_edge + trace_every
-        print "\nNew left edge:", left_edge
+        # print "\nNew left edge:", left_edge
         #print "Searching between", left_edge,"and",right_edge
 
         pickable_lines = numpy.append(pickable_lines, selected_lines[:,-1])
 
-    print "\n=========="*5
+    # print "\n=========="*5
 
     pickable_lines = pickable_lines.astype(numpy.int)
 
-    print pickable_lines
-    numpy.savetxt(sys.stdout, linelist[pickable_lines], " %8.2f")
-
-    numpy.savetxt("pickable", linelist[pickable_lines], " %8.2f")
+    # print pickable_lines
+    # numpy.savetxt(sys.stdout, linelist[pickable_lines], " %8.2f")
+    # numpy.savetxt("pickable", linelist[pickable_lines], " %8.2f")
 
     #
     # Now weed out the lines that are too close to other lines, eliminating 
     # the weaker ones first
     #
     cands = linelist[pickable_lines]
-    #s2n = final_candidates[:, wlcal.lineinfo_colidx['S2N']]
-    #print s2n
-    #s2n_sort = numpy.argsort(final_candidates[:, wlcal.lineinfo_colidx['S2N']])
-    #final_sorted = final_candidates[s2n_sort]
-
-    #print final_sorted[:, wlcal.lineinfo_colidx['S2N']]
-    
-    # lines_to_delete = True
-    # while (lines_to_delete):
-    #     x = cands[:, wlcal.lineinfo_colidx['S2N']]
-    #     spacing = x.reshape((-1,1)) - x.reshape((1, -1)) #cands[:, wlcal.lineinfo_colidx['S2N']]cands[:, wlcal.lineinfo_colidx['S2N']] - cands[:, wlcal.lineinfo_colidx['S2N']].T
-    #     print spacing 
-    #     break
-
     
     final_indices = numpy.array([], dtype=numpy.int)
     while (cands.shape[0] > 0):
@@ -579,22 +573,22 @@ def pick_line_every_separation(
 
         # Select all lines with only 1 match (themselves). These are keepers
         count = numpy.sum(numpy.isfinite(d), axis=1)
-        print count.shape
-        print count
+        # print count.shape
+        # print count
 
         # For all other lines, eliminate the least significant line in the 
         # close vicinity and try again
 
         keepers = (count == 1)
-        print cands[keepers, -1]
+        # print cands[keepers, -1]
         final_indices = numpy.append(final_indices, cands[keepers, -1])
 
         
-        print "BEFORE:", cands.shape
+        # print "BEFORE:", cands.shape
         # numpy.delete(cands, keepers)
         cands = cands[~keepers]
-        print "AFTER:", cands.shape
-        print count[~keepers]
+        # print "AFTER:", cands.shape
+        # print count[~keepers]
 
         if (cands.shape[0] <= 1):
             # No lines left, so nothing left to eliminate
@@ -607,16 +601,19 @@ def pick_line_every_separation(
         # sel_strong = numpy.ones(cands.shape[0], dtype=numpy.bool)
         # sel_strong[weakest] = False
         cands = numpy.delete(cands, weakest, axis=0)
-        print "AFTER #2:", cands.shape
+        # print "AFTER #2:", cands.shape
 
         # print d.shape, d
         # print i.shape, i
         # break
 
-    print final_indices.shape
-    print final_indices
+    # print final_indices.shape
+    # print final_indices
 
-    numpy.savetxt("picked_final", linelist[final_indices.astype(numpy.int)], " %8.2f")
+    logger.debug("Final line indices:\n%s" % (
+        " ".join(["%d" % i for i in final_indices.astype(numpy.int)])
+    ))
+    # numpy.savetxt("picked_final", linelist[final_indices.astype(numpy.int)], " %8.2f")
     return final_indices.astype(numpy.int)
 
 
