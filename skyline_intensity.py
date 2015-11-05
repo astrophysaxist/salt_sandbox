@@ -31,7 +31,7 @@ def compute_local_median_std(tracedata, intensity, window=5):
     return med_std
 
 
-def find_skyline_profiles(hdulist, skyline_list):
+def find_skyline_profiles(hdulist, skyline_list, write_debug_data=False):
 
     data = hdulist['SCI.RAW'].data
     line = int(data.shape[0]/2)
@@ -84,16 +84,17 @@ def find_skyline_profiles(hdulist, skyline_list):
 
         pos, intensity = traceline.subpixel_centroid_trace(
             data, tracedata, width=10, 
-            dumpfile="skyline_%02d.fits" % (idx+1))
+            dumpfile="skyline_%02d.fits" % (idx+1) if write_debug_data else None)
 
         #
         # Now compute the local standard deviation around each pixel
         #
         medstd = compute_local_median_std(tracedata, intensity)
-        
-        numpy.savetxt("sky_trace.%d" % (idx+1),
-                      numpy.append(tracedata,
-                                   intensity.reshape((-1,1)), axis=1))
+
+        if (write_debug_data):
+            numpy.savetxt("sky_trace.%d" % (idx+1),
+                          numpy.append(tracedata,
+                                       intensity.reshape((-1,1)), axis=1))
     
         combined = numpy.empty((tracedata.shape[0], tracedata.shape[1]+3))
         combined[:,:tracedata.shape[1]] = tracedata[:]
@@ -150,10 +151,11 @@ def find_skyline_profiles(hdulist, skyline_list):
     weighted_avg = bottleneck.nansum(norm_profiles*weights, axis=1) / numpy.sum(weights, axis=1)
     print weighted_avg.shape
 
-    numpy.savetxt("sky_trace.wavg",
-                  numpy.append(numpy.arange(weighted_avg.shape[0]).reshape((-1,1)),
-                               weighted_avg.reshape((-1,1)), axis=1))
-    
+    if (write_debug_data):
+        numpy.savetxt("sky_trace.wavg",
+                      numpy.append(numpy.arange(weighted_avg.shape[0]).reshape((-1,1)),
+                                   weighted_avg.reshape((-1,1)), axis=1))
+        
     #
     # Now in a final step, average/median filter the results to create a higher
     # signal-to-noise correction
@@ -171,12 +173,13 @@ def find_skyline_profiles(hdulist, skyline_list):
         [bottleneck.nanmedian(padded[i-w:i+w+1]) for i in range(w,padded.shape[0]-w)])
     #weighted_avg.shape[0])])
 
-    numpy.savetxt("sky_trace.wavg_avg",
-                  numpy.append(numpy.arange(weighted_avg.shape[0]).reshape((-1,1)),
-                               blkavg.reshape((-1,1)), axis=1))
-    numpy.savetxt("sky_trace.wavg_med",
-                  numpy.append(numpy.arange(weighted_avg.shape[0]).reshape((-1,1)),
-                               blkmedian.reshape((-1,1)), axis=1))
+    if (write_debug_data):
+        numpy.savetxt("sky_trace.wavg_avg",
+                      numpy.append(numpy.arange(weighted_avg.shape[0]).reshape((-1,1)),
+                                   blkavg.reshape((-1,1)), axis=1))
+        numpy.savetxt("sky_trace.wavg_med",
+                      numpy.append(numpy.arange(weighted_avg.shape[0]).reshape((-1,1)),
+                                   blkmedian.reshape((-1,1)), axis=1))
 
     #
     # Now return the raw intensity profile, and the median and average 
