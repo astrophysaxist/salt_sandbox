@@ -8,6 +8,8 @@ from optimal_spline_basepoints import satisfy_schoenberg_whitney
 import bottleneck
 import logging
 
+import pysalt.mp_logging
+
 def compute_smoothed_profile(data_x, data_y, 
                              n_iterations=3,
                              n_max_neighbors=100, # pixels
@@ -163,6 +165,8 @@ def compute_smoothed_profile(data_x, data_y,
 #if (False):
 if __name__ == "__main__":
 
+    logger_setup = pysalt.mp_logging.setup_logging()
+
     filename = sys.argv[1]
     hdulist = pyfits.open(filename)
 
@@ -198,13 +202,15 @@ if __name__ == "__main__":
     # Now find lines
     #
     print("Searching for night-sky lines")
-    nightsky_spec_1d = numpy.average(skylines[600:620,:], axis=0)
+    #nightsky_spec_1d = numpy.average(skylines[600:620,:], axis=0)
+    nightsky_spec_1d = numpy.average(data[600:620,:], axis=0)
     print nightsky_spec_1d.shape
     numpy.savetxt("nightsky", nightsky_spec_1d)
     #wlcal.extract_arc_spectrum(fake_hdu, line=600,avg_width=30)
 
 
-    lines = wlcal.find_list_of_lines(nightsky_spec_1d, readnoise=2, avg_width=30)
+    lines = wlcal.find_list_of_lines(nightsky_spec_1d, readnoise=2, avg_width=20,
+                                     pre_smooth=2)
     print lines
     numpy.savetxt("nightsky_lines", lines)
 
@@ -259,3 +265,5 @@ if __name__ == "__main__":
     # spline_fit = spline(data_x)
     # numpy.savetxt("skylines.spline", spline_fit)
 
+
+    pysalt.mp_logging.shutdown_logging(logger_setup)
