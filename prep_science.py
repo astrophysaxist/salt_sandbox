@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+import warnings
+
 import os, sys, scipy, scipy.stats, scipy.ndimage, pyfits, numpy
 import wlcal
 import skyline_intensity
@@ -7,6 +9,10 @@ import skyline_intensity
 from optimal_spline_basepoints import satisfy_schoenberg_whitney
 import bottleneck
 import logging
+
+warnings.simplefilter('ignore', UserWarning)
+
+from wlcal import lineinfo_colidx
 
 import pysalt.mp_logging
 
@@ -195,7 +201,7 @@ def filter_isolate_skylines(data, write_debug_data=False):
     return skylines, data_filtered
 
 
-def extract_skyline_intensity_profile(hdulist, data):
+def extract_skyline_intensity_profile(hdulist, data, wls=None):
 
     logger = logging.getLogger("NightskyFlats")
 
@@ -210,10 +216,21 @@ def extract_skyline_intensity_profile(hdulist, data):
     #print nightsky_spec_1d.shape
     numpy.savetxt("nightsky", nightsky_spec_1d)
     #wlcal.extract_arc_spectrum(fake_hdu, line=600,avg_width=30)
-
+    
+    
 
     lines = wlcal.find_list_of_lines(nightsky_spec_1d, readnoise=2, avg_width=20,
                                      pre_smooth=2)
+
+    if (not wls == None):
+        # We have a valid wavelength calibration, so convert pixel 
+        # coordinates to wavelengths
+        lines[:,lineinfo_colidx['WAVELENGTH']] = \
+            numpy.polynomial.polynomial.polyval(
+                lines[:,lineinfo_colidx['PIXELPOS']], 
+                wls
+            )
+
     #print lines
     numpy.savetxt("nightsky_lines", lines)
 
@@ -230,6 +247,7 @@ def extract_skyline_intensity_profile(hdulist, data):
             data=data,
             write_debug_data=True,
             tracewidth=25,
+            n_lines_max=5,
         )
 
     numpy.savetxt("skylines.weightedavg", weighted_avg)
@@ -287,6 +305,17 @@ if __name__ == "__main__":
 
     data = hdulist['SCI.RAW'].data
 
-    profile = extract_skyline_intensity_profile(hdulist, data)
+    n_params = hdulist[0].header['WLSFIT_N']
+    wls_fit = numpy.zeros(n_params)
+    for i in range(n_params):
+        wls_fit[i] = hdulist[0].header['WLSFIT_%d' % (i)]
+
+    skylines, lines, profile = extract_skyline_intensity_profile(hdulist, data, wls=wls_fit)
+
+    for i in range(2):
+        fn = "skyline_%02d.fits" % (i+1)
+        h = pyfits.open(fn)
+        h[1].data /= profile.reshape((-1,1))
+        h.writeto(fn[:-5]+".flat.fits", clobber=True)
 
     pysalt.mp_logging.shutdown_logging(logger_setup)
