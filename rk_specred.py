@@ -602,6 +602,14 @@ def specred(rawdir, prodir,
             wls_data = wlcal.find_wavelength_solution(hdu_mosaiced, None)
 
             #
+            # Write wavelength solution to FITS header so we can access it 
+            # again if we need to at a later point
+            #
+            logger.info("Storing wavelength solution in ARC file (%s)" % (arc_mosaic_filename))
+            for i in range(len(wls_data['wl_fit_coeffs'])):
+                hdu_mosaiced[0].header['WLSFIT_%d' % (i)] = wls_data['wl_fit_coeffs'][i]
+
+            #
             # Now add some plotting here just to make sure the user is happy :-)
             #
             plotfile = arc_mosaic_filename[:-5]+".png"
