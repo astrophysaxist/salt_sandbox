@@ -78,6 +78,7 @@ import traceline
 import skysub2d
 import optimal_spline_basepoints as optimalskysub
 import skyline_intensity
+import prep_science
 
 wlmap_fitorder = [2,2]
 
@@ -485,24 +486,13 @@ def specred(rawdir, prodir,
     if (not os.path.isdir(work_dir)):
         os.mkdir(work_dir)
 
-    reduction_steps = [
-        '01.prepare',
-        '02.bias',
-        '03.gain',
-        '04.xtalk',
-        '05.crjclean',
-        '06.flat',
-        '07.',
-        '08.',
-    ]
-
-    #
-    # Make sure we have all directories 
-    #
-    for rs in reduction_steps:
-        dirname = "%s/%s" % (work_dir, rs)
-        if (not os.path.isdir(dirname)):
-            os.mkdir(dirname)
+    # #
+    # # Make sure we have all directories 
+    # #
+    # for rs in reduction_steps:
+    #     dirname = "%s/%s" % (work_dir, rs)
+    #     if (not os.path.isdir(dirname)):
+    #         os.mkdir(dirname)
 
     #
     # Go through the list of files, find out what type of file they are
@@ -770,37 +760,59 @@ def specred(rawdir, prodir,
             arc_region_file=arc_region_file,
             return_slitprofile=True,
             trace_every=0.05)
+        print wls_2d
         wl_hdu = pyfits.ImageHDU(data=wls_2d)
         wl_hdu.name = "WAVELENGTH"
         hdu.append(wl_hdu)
         
+        # 
+        # Extract the sky-line intensity profile along the slit. Use this to 
+        # correct the data. This should also improve the quality of the extracted
+        # 2-D sky.
         #
-        # Now go ahead and extract the full 2-d sky
-        #
-        logger.info("Extracting 2-D sky")
-        sky_regions = numpy.array([[0, hdu['SCI'].data.shape[0]]])
-        sky2d = skysub2d.make_2d_skyspectrum(
-            hdu,
-            wls_2d,
-            sky_regions=sky_regions,
-            oversample_factor=1.0,
-            slitprofile=slitprofile,
+        skylines, skyline_list, intensity_profile = \
+            prep_science.extract_skyline_intensity_profile(
+                hdulist=hdu, 
+                data=hdu['SCI.RAW'].data)
+        # Flatten the science frame using the line profile
+        hdu.append(
+            pyfits.ImageHDU(
+                data=hdu['SCI'].data, 
+                header=hdu['SCI'].header, 
+                name="SCI.PREFLAT"
             )
+        )
 
-        logger.info("Performing sky subtraction")
-        sky_hdu = pyfits.ImageHDU(data=sky2d)
-        sky_hdu.name = "SKY"
-        hdu.append(sky_hdu)
+        # hdu['SCI'].data /= intensity_profile.reshape((-1,1))
+        # logger.info("Slit-flattened SCI extension")
 
-        sky_hdux = pyfits.ImageHDU(data=sky2d*slitprofile.reshape((-1,1)))
-        sky_hdux.name = "SKY_X"
-        hdu.append(sky_hdux)
+        # #
+        # # Now go ahead and extract the full 2-d sky
+        # #
+        # logger.info("Extracting 2-D sky")
+        # sky_regions = numpy.array([[0, hdu['SCI'].data.shape[0]]])
+        # sky2d = skysub2d.make_2d_skyspectrum(
+        #     hdu,
+        #     wls_2d,
+        #     sky_regions=sky_regions,
+        #     oversample_factor=1.0,
+        #     slitprofile=None, #slitprofile,
+        #     )
 
-        # Don't forget to subtract the sky off the image
-        for source_ext in ['SCI', 'SCI.NOCRJ']:
-            hdu[source_ext].data -= sky2d #(sky2d * slitprofile.reshape((-1,1)))
+        # logger.info("Performing sky subtraction")
+        # sky_hdu = pyfits.ImageHDU(data=sky2d, name='SKY')
+        # hdu.append(sky_hdu)
 
-        numpy.savetxt("OBJ_%s_slit.asc" % (fb[:-5]), slitprofile)
+        # if (not slitprofile == None):
+        #     sky_hdux = pyfits.ImageHDU(data=sky2d*slitprofile.reshape((-1,1)))
+        #     sky_hdux.name = "SKY_X"
+        #     hdu.append(sky_hdux)
+
+        # # Don't forget to subtract the sky off the image
+        # for source_ext in ['SCI', 'SCI.NOCRJ']:
+        #     hdu[source_ext].data -= sky2d #(sky2d * slitprofile.reshape((-1,1)))
+
+        # numpy.savetxt("OBJ_%s_slit.asc" % (fb[:-5]), slitprofile)
 
         #
         # Compute the optimized sky, using better-chosen spline basepoints 
@@ -828,12 +840,15 @@ def specred(rawdir, prodir,
         # logger.info("Creating spatial flatfield from sky-line intensity profiles")
         # i, ia, im = skyline_intensity.find_skyline_profiles(hdu, skyline_list)
     
-        sky_2d, spline = optimalskysub.optimal_sky_subtraction(hdu, 
-                                                 sky_regions=sky_regions,
-                                                 N_points=10000,
-                                                 iterate=False,
-                                                 skiplength=5,
-                                                 skyline_flat=ia)
+        sky_2d, spline = optimalskysub.optimal_sky_subtraction(
+            hdu, 
+            sky_regions=sky_regions,
+            N_points=10000,
+            iterate=False,
+            skiplength=5,
+            skyline_flat=intensity_profile.reshape((-1,1)),
+        )
+
 
         #
         # And finally write reduced frame back to disk
