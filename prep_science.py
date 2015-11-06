@@ -195,16 +195,7 @@ def filter_isolate_skylines(data, write_debug_data=False):
     return skylines
 
 
-
-#if (False):
-if __name__ == "__main__":
-
-    logger_setup = pysalt.mp_logging.setup_logging()
-
-    filename = sys.argv[1]
-    hdulist = pyfits.open(filename)
-
-    data = hdulist['STEP3'].data
+def extract_skyline_intensity_profile(hdulist, data):
 
     skylines = filter_isolate_skylines(data)
 
@@ -230,13 +221,16 @@ if __name__ == "__main__":
 
     #
     print("Tracing emission line intensity profile")
-    weighted_avg, blkavg, blkmedian = skyline_intensity.find_skyline_profiles(hdulist, lines)
+    weighted_avg, blkavg, blkmedian = \
+        skyline_intensity.find_skyline_profiles(
+            hdulist, 
+            lines, 
+            data=skylines
+        )
 
     numpy.savetxt("skylines.weightedavg", weighted_avg)
     numpy.savetxt("skylines.blkavg", blkavg)
     numpy.savetxt("skylines.blkmedian", blkmedian)
-
-#else:
 
     weighted_avg = numpy.loadtxt("skylines.weightedavg")
     blkavg = numpy.loadtxt("skylines.blkavg")
@@ -268,12 +262,23 @@ if __name__ == "__main__":
     flat_skylines = skylines / intensity_profile.reshape((-1,1))
     pyfits.PrimaryHDU(data=flat_skylines).writeto("flat_skylines.fits", clobber=True)
 
-    
     #
     # Return results
     #
-    # spline_fit = spline(data_x)
-    # numpy.savetxt("skylines.spline", spline_fit)
+    return intensity_profile
 
+    
+
+#if (False):
+if __name__ == "__main__":
+
+    logger_setup = pysalt.mp_logging.setup_logging()
+
+    filename = sys.argv[1]
+    hdulist = pyfits.open(filename)
+
+    data = hdulist['STEP3'].data
+
+    profile = extract_skyline_intensity_profile(hdulist, data)
 
     pysalt.mp_logging.shutdown_logging(logger_setup)
