@@ -161,21 +161,14 @@ def compute_smoothed_profile(data_x, data_y,
     return local_median
 
 
+def filter_isolate_skylines(data, write_debug_data=False):
 
-#if (False):
-if __name__ == "__main__":
-
-    logger_setup = pysalt.mp_logging.setup_logging()
-
-    filename = sys.argv[1]
-    hdulist = pyfits.open(filename)
-
-    data = hdulist['STEP3'].data
+    logger = logging.getLogger("FilterIsolateSkylines")
 
     #
     # run a median filter in x-direction to eliminate continua
     #
-    print("Filtering to separate continuum and skylines")
+    logger.info("Filtering to separate continuum and skylines")
     data_filtered = scipy.ndimage.filters.median_filter(
         input=data, 
         size=(1,75), 
@@ -188,15 +181,32 @@ if __name__ == "__main__":
 
     skylines = data - data_filtered
 
-    print("Writing debug information to FITS")
-    pyfits.PrimaryHDU(data=data).writeto("data.fits", clobber=True)
-    pyfits.PrimaryHDU(data=data_filtered).writeto("filtered.fits", clobber=True)
-    pyfits.PrimaryHDU(data=skylines).writeto("skylines.fits", clobber=True)
+    if (write_debug_data):
+        logger.debug("Writing debug information to FITS")
+        pyfits.PrimaryHDU(data=data).writeto("data.fits", clobber=True)
+        pyfits.PrimaryHDU(data=data_filtered).writeto("filtered.fits", clobber=True)
+        pyfits.PrimaryHDU(data=skylines).writeto("skylines.fits", clobber=True)
 
-    fake_hdu = pyfits.HDUList([
-        pyfits.PrimaryHDU(),
-        pyfits.ImageHDU(data=skylines, name="SCI"),
+        fake_hdu = pyfits.HDUList([
+            pyfits.PrimaryHDU(),
+            pyfits.ImageHDU(data=skylines, name="SCI"),
         ])
+
+    return skylines
+
+
+
+#if (False):
+if __name__ == "__main__":
+
+    logger_setup = pysalt.mp_logging.setup_logging()
+
+    filename = sys.argv[1]
+    hdulist = pyfits.open(filename)
+
+    data = hdulist['STEP3'].data
+
+    skylines = filter_isolate_skylines(data)
 
     #
     # Now find lines
