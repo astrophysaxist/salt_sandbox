@@ -68,11 +68,16 @@ def optimal_sky_subtraction(obj_hdulist,
     obj_cube[:,:,2] = obj_rms[:,:]
     obj_cube[:,:,3] = obj_spatial[:,:]
 
+    pyfits.PrimaryHDU(data=obj_cube[:,:,1]).writeto("data_preflat.fits", clobber=True)
+
     if (not type(skyline_flat) == type(None)):
         # We also received a skyline flatfield for field flattening
         obj_cube[:,:,1] /= skyline_flat.reshape((-1,1))
+        logger.info("Applying skyline flatfield to data before sky-subtraction")
         #return 1,2
         pass
+
+    pyfits.PrimaryHDU(data=obj_cube[:,:,1]).writeto("data_postflat.fits", clobber=True)
 
     obj_cube = obj_cube.reshape((-1, obj_cube.shape[2]))
 
