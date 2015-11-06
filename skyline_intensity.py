@@ -2,6 +2,7 @@
 
 import os, sys, pyfits, numpy
 import bottleneck
+import logging
 
 from wlcal import lineinfo_colidx
 import traceline
@@ -34,8 +35,13 @@ def compute_local_median_std(tracedata, intensity, window=5):
 def find_skyline_profiles(hdulist, skyline_list, data=None, 
                           write_debug_data=False, 
                           tracewidth=10,
-                          use_coords='pixel'
+                          use_coords='pixel',
+                          n_lines_max=15,
+                          min_signal_to_noise=10,
 ):
+
+
+    logger = logging.getLogger("SkylineProfiles")
 
     if (data == None):
         data = hdulist['SCI.RAW'].data
@@ -56,7 +62,7 @@ def find_skyline_profiles(hdulist, skyline_list, data=None,
     s2n_sort = numpy.argsort(skyline_list[:,4])[::-1]
     skyline_list = skyline_list[s2n_sort]
 
-    n_lines = numpy.min(numpy.array([skyline_list.shape[0], 15]))
+    n_lines = numpy.min(numpy.array([skyline_list.shape[0], n_lines_max]))
     profiles = numpy.empty((data.shape[0], n_lines))
 
     min_intensity = 600
@@ -80,10 +86,12 @@ def find_skyline_profiles(hdulist, skyline_list, data=None,
         pixelpos = skyline_list[idx, lineinfo_colidx['PIXELPOS']]
         line_wavelength = wl[line, int(pixelpos)]
 
-        print skyline_list[idx, lineinfo_colidx['WAVELENGTH']],\
-            skyline_list[idx, lineinfo_colidx['PIXELPOS']],\
-            line_wavelength, \
-            skyline_list[idx, lineinfo_colidx['S2N']]
+        s2n = skyline_list[idx, lineinfo_colidx['S2N']]
+        logger.info("Tracing line: X=%d, L=%.3f, S/N=%.2f" % (pixelpos, line_wavelength, s2n))
+        # print skyline_list[idx, lineinfo_colidx['WAVELENGTH']],\
+        #     skyline_list[idx, lineinfo_colidx['PIXELPOS']],\
+        #     line_wavelength, \
+        #     skyline_list[idx, lineinfo_colidx['S2N']]
 
         # then use the wavelength map to track the line across the focalplane
         closest = numpy.argmin(wl < line_wavelength, axis=1)
