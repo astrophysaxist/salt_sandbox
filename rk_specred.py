@@ -606,6 +606,7 @@ def specred(rawdir, prodir,
             # again if we need to at a later point
             #
             logger.info("Storing wavelength solution in ARC file (%s)" % (arc_mosaic_filename))
+            hdu_mosaiced[0].header['WLSFIT_N'] = len(wls_data['wl_fit_coeffs'])
             for i in range(len(wls_data['wl_fit_coeffs'])):
                 hdu_mosaiced[0].header['WLSFIT_%d' % (i)] = wls_data['wl_fit_coeffs'][i]
 
@@ -759,20 +760,32 @@ def specred(rawdir, prodir,
         #
         logger.info("Computing 2-D wavelength map")
         arc_region_file = "OBJ_%s_traces.reg" % (fb[:-5])
-        wls_2d, slitprofile = traceline.compute_2d_wavelength_solution(
-            arc_filename=good_arc, 
-            n_lines_to_trace=-50, # trace all lines with S/N > 50 
-            fit_order=wlmap_fitorder,
-            output_wavelength_image="wl+image.fits",
-            debug=False,
-            arc_region_file=arc_region_file,
-            return_slitprofile=True,
-            trace_every=0.05)
-        print wls_2d
-        wl_hdu = pyfits.ImageHDU(data=wls_2d)
-        wl_hdu.name = "WAVELENGTH"
-        hdu.append(wl_hdu)
-        
+        # wls_2d, slitprofile = traceline.compute_2d_wavelength_solution(
+        #     arc_filename=good_arc, 
+        #     n_lines_to_trace=-50, # trace all lines with S/N > 50 
+        #     fit_order=wlmap_fitorder,
+        #     output_wavelength_image="wl+image.fits",
+        #     debug=False,
+        #     arc_region_file=arc_region_file,
+        #     return_slitprofile=True,
+        #     trace_every=0.05)
+        # print wls_2d
+        # wl_hdu = pyfits.ImageHDU(data=wls_2d)
+        # wl_hdu.name = "WAVELENGTH"
+        # hdu.append(wl_hdu)
+
+        arc_hdu = pyfits.open(good_arc)
+        wls_2d = arc_hdu['WAVELENGTH'].data
+
+        n_params = arc_hdu[0].header['WLSFIT_N']
+        hdu[0].header["WLSFIT_N"] = arc_hdu[0].header["WLSFIT_N"]
+        wls_fit = numpy.zeros(n_params)
+        for i in range(n_params):
+            wls_fit[i] = arc_hdu[0].header['WLSFIT_%d' % (i)]
+            hdu[0].header['WLSFIT_%d' % (i)] = arc_hdu[0].header['WLSFIT_%d' % (i)]
+            
+        hdu.append(pyfits.ImageHDU(data=wls_2d, name='WAVELENGTH'))
+
         # 
         # Extract the sky-line intensity profile along the slit. Use this to 
         # correct the data. This should also improve the quality of the extracted
