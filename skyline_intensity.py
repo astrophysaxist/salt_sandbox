@@ -31,13 +31,24 @@ def compute_local_median_std(tracedata, intensity, window=5):
     return med_std
 
 
-def find_skyline_profiles(hdulist, skyline_list, data=None, write_debug_data=False):
+def find_skyline_profiles(hdulist, skyline_list, data=None, 
+                          write_debug_data=False, 
+                          tracewidth=10,
+                          use_coords='pixel'
+):
 
     if (data == None):
         data = hdulist['SCI.RAW'].data
 
     line = int(data.shape[0]/2)
+
+    if (use_coords == 'pixel'):
+        pass
+    else:
+        pass
+
     wl = hdulist['WAVELENGTH'].data
+
     line_wl = wl[line,:]
 
     print line_wl
@@ -85,7 +96,7 @@ def find_skyline_profiles(hdulist, skyline_list, data=None, write_debug_data=Fal
             axis=1)
 
         pos, intensity = traceline.subpixel_centroid_trace(
-            data, tracedata, width=10, 
+            data, tracedata, width=tracewidth, 
             dumpfile="skyline_%02d.fits" % (idx+1) if write_debug_data else None)
 
         #
