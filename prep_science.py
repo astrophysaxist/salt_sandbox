@@ -20,7 +20,7 @@ def compute_smoothed_profile(data_x, data_y,
     logger = logging.getLogger("FitSplineToNoisyData")
 
     valid = numpy.isfinite(data_x) & numpy.isfinite(data_y)
-    if (numpy.sum(valid) < data.shape[0]):
+    if (numpy.sum(valid) < data_x.shape[0]):
         # there is at least one NaN that we need to replace
         
         #data_x = data_x[valid]
@@ -56,7 +56,7 @@ def compute_smoothed_profile(data_x, data_y,
 
         # With this we can estimate the scatter around each spline fit basepoint
         local_var = bottleneck.nanstd(neighbors, axis=1)
-        print "variance:", local_var.shape
+        # print "variance:", local_var.shape
         numpy.savetxt("fit_variance.iter_%d" % (iteration+1),
                       numpy.append(data_x.reshape((-1,1)),
                                    local_var.reshape((-1,1)), axis=1))
@@ -192,27 +192,29 @@ def filter_isolate_skylines(data, write_debug_data=False):
             pyfits.ImageHDU(data=skylines, name="SCI"),
         ])
 
-    return skylines
+    return skylines, data_filtered
 
 
 def extract_skyline_intensity_profile(hdulist, data):
 
-    skylines = filter_isolate_skylines(data)
+    logger = logging.getLogger("NightskyFlats")
+
+    skylines, continuum = filter_isolate_skylines(data)
 
     #
     # Now find lines
     #
-    print("Searching for night-sky lines")
+    logger.info("Searching for night-sky lines")
     #nightsky_spec_1d = numpy.average(skylines[600:620,:], axis=0)
     nightsky_spec_1d = numpy.average(data[600:620,:], axis=0)
-    print nightsky_spec_1d.shape
+    #print nightsky_spec_1d.shape
     numpy.savetxt("nightsky", nightsky_spec_1d)
     #wlcal.extract_arc_spectrum(fake_hdu, line=600,avg_width=30)
 
 
     lines = wlcal.find_list_of_lines(nightsky_spec_1d, readnoise=2, avg_width=20,
                                      pre_smooth=2)
-    print lines
+    #print lines
     numpy.savetxt("nightsky_lines", lines)
 
     #
@@ -220,27 +222,29 @@ def extract_skyline_intensity_profile(hdulist, data):
     #
 
     #
-    print("Tracing emission line intensity profile")
+    logger.info("Tracing emission line intensity profile")
     weighted_avg, blkavg, blkmedian = \
         skyline_intensity.find_skyline_profiles(
             hdulist, 
             lines, 
-            data=skylines
+            data=data,
+            write_debug_data=True,
+            tracewidth=25,
         )
 
     numpy.savetxt("skylines.weightedavg", weighted_avg)
     numpy.savetxt("skylines.blkavg", blkavg)
     numpy.savetxt("skylines.blkmedian", blkmedian)
 
-    weighted_avg = numpy.loadtxt("skylines.weightedavg")
-    blkavg = numpy.loadtxt("skylines.blkavg")
-    blkmedian = numpy.loadtxt("skylines.blkmedian")
+    # weighted_avg = numpy.loadtxt("skylines.weightedavg")
+    # blkavg = numpy.loadtxt("skylines.blkavg")
+    # blkmedian = numpy.loadtxt("skylines.blkmedian")
 
     # Now fit a smoothing spline, while rejecting outliers
     n_points = 100
     k_basepoints = numpy.linspace(1, weighted_avg.shape[0]-2, 100)
-    print k_basepoints.shape[0]
-    print k_basepoints
+    # print k_basepoints.shape[0]
+    # print k_basepoints
     
 
     data_x = numpy.arange(weighted_avg.shape[0])
@@ -262,10 +266,14 @@ def extract_skyline_intensity_profile(hdulist, data):
     flat_skylines = skylines / intensity_profile.reshape((-1,1))
     pyfits.PrimaryHDU(data=flat_skylines).writeto("flat_skylines.fits", clobber=True)
 
+    pyfits.PrimaryHDU(
+        data=data/intensity_profile.reshape((-1,1))).writeto(
+            "flat_data.fits", clobber=True)
+
     #
     # Return results
     #
-    return intensity_profile
+    return skylines, lines, intensity_profile
 
     
 
@@ -277,7 +285,7 @@ if __name__ == "__main__":
     filename = sys.argv[1]
     hdulist = pyfits.open(filename)
 
-    data = hdulist['STEP3'].data
+    data = hdulist['SCI.RAW'].data
 
     profile = extract_skyline_intensity_profile(hdulist, data)
 
