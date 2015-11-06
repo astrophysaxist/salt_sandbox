@@ -940,7 +940,7 @@ def find_wavelength_solution(filename, line):
     logger.info("Best fit wavelength solution: L = %9.3f %+9.3f * x %+9.3e x^2 %+9.3e x^3" % (
         wls[0], wls[1], wls[2], wls[3]))
 
-
+    
     # # # set the indices for bad matches to a valid value
     # # i[~good_matches] = 0
 

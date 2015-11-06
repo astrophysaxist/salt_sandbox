@@ -532,7 +532,7 @@ def pick_line_every_separation(
             # pick the strongest line we could find
             strong_line = [numpy.argmax(line_candidates[:, wlcal.lineinfo_colidx['S2N']])]
             logger.debug("Picking the strongest line locally: ID=%d pxX=%.1f" % (
-                strong_line, line_candidates[strong_line, wlcal.lineinfo_colidx['PIXELPOS']]))
+                strong_line[0], line_candidates[strong_line, wlcal.lineinfo_colidx['PIXELPOS']]))
 
             
         # IDs for good lines in this part of the spectrum
