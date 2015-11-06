@@ -79,6 +79,7 @@ import skysub2d
 import optimal_spline_basepoints as optimalskysub
 import skyline_intensity
 import prep_science
+import podi_cython
 
 wlmap_fitorder = [2,2]
 
@@ -379,10 +380,35 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
     else:
         crj_function = pysalt.saltred.saltcrclean.crclean
     if (clean_cosmics):
-        hdulist = crj_function(hdulist, 
-                               crtype='edge', thresh=5, mbox=11, bthresh=5.0,
-                               flux_ratio=0.2, bbox=25, gain=1.0, rdnoise=5.0, fthresh=5.0, bfactor=2,
-                               gbox=3, maxiter=5)
+        # hdulist = crj_function(hdulist, 
+        #                        crtype='edge', thresh=5, mbox=11, bthresh=5.0,
+        #                        flux_ratio=0.2, bbox=25, gain=1.0, rdnoise=5.0, fthresh=5.0, bfactor=2,
+        #                        gbox=3, maxiter=5)
+
+        gain = 1.5
+        readnoise = 6
+
+        sigclip = 5.0
+        sigfrac = 0.3
+        objlim = 5.0
+        saturation_limit=65000
+
+        # This is BEFORE mosaicing, therefore:
+        # Loop over all SCI extensions
+        for ext in hdulist:
+            if (ext.name == 'SCI'):
+                crj = podi_cython.lacosmics(
+                    ext.data.astype(numpy.float64), 
+                    gain=gain, 
+                    readnoise=readnoise, 
+                    niter=3,
+                    sigclip=sigclip, sigfrac=sigfrac, objlim=objlim,
+                    saturation_limit=saturation_limit,
+                    verbose=False
+                )
+                cell_cleaned, cell_mask, cell_saturated = crj
+                ext.data = cell_cleaned
+        
     logger.debug("done with cosmics")
 
 
@@ -700,7 +726,7 @@ def specred(rawdir, prodir,
         hdu = salt_prepdata(filename, 
                             badpixelimage=None, 
                             create_variance=True, 
-                            clean_cosmics=False,# True,
+                            clean_cosmics=True,
                             mosaic=True,
                             verbose=False,
         )
@@ -794,7 +820,8 @@ def specred(rawdir, prodir,
         skylines, skyline_list, intensity_profile = \
             prep_science.extract_skyline_intensity_profile(
                 hdulist=hdu, 
-                data=hdu['SCI.RAW'].data)
+                data=hdu['SCI.RAW'].data,
+                wls=wls_fit)
         # Flatten the science frame using the line profile
         hdu.append(
             pyfits.ImageHDU(
