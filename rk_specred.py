@@ -830,6 +830,24 @@ def specred(rawdir, prodir,
                 name="SCI.PREFLAT"
             )
         )
+        hdu.append(
+            pyfits.ImageHDU(
+                data=hdu['SCI'].data/intensity_profile.reshape((-1,1)), 
+                header=hdu['SCI'].header, 
+                name="SCI.POSTFLAT"
+            )
+        )
+
+        #
+        # Mask out all regions with relative intensities below 0.1x max 
+        #
+        stats = scipy.stats.scoreatpercentile(intensity_profile, [50, 16,84, 2.5,97.5])
+        one_sigma = (stats[4] - stats[3]) / 4.
+        median = stats[0]
+        bad_region = intensity_profile < median-1*one_sigma
+        hdu['SCI'].data[bad_region] = numpy.NaN
+        intensity_profile[bad_region] = numpy.NaN
+
 
         # hdu['SCI'].data /= intensity_profile.reshape((-1,1))
         # logger.info("Slit-flattened SCI extension")
