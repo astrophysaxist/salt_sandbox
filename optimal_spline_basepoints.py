@@ -97,7 +97,9 @@ def optimal_sky_subtraction(obj_hdulist,
         is_sky = numpy.zeros((obj_cube.shape[0]), dtype=numpy.bool)
         for idx, sky_region in enumerate(sky_regions):
             logger.debug("Good region: %d ... %d" % (sky_region[0], sky_region[1]))
-            in_region = (obj_cube[:,3] > sky_region[0]) & (obj_cube[:,3] < sky_region[1])
+            in_region = (obj_cube[:,3] > sky_region[0]) & \
+                        (obj_cube[:,3] < sky_region[1]) & \
+                        (numpy.isfinite(obj_cube[:,1]))
             is_sky[in_region] = True
 
         obj_cube = obj_cube[is_sky]
@@ -106,10 +108,10 @@ def optimal_sky_subtraction(obj_hdulist,
     allskies = obj_cube[::skiplength]
     numpy.savetxt("xxx1", allskies)
 
-    _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
-                         header=obj_hdulist['SCI.RAW'].header)
-    _x.name = "STEP1"
-    obj_hdulist.append(_x)
+    # _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
+    #                      header=obj_hdulist['SCI.RAW'].header)
+    # _x.name = "STEP1"
+    # obj_hdulist.append(_x)
 
 
 
@@ -246,10 +248,10 @@ def optimal_sky_subtraction(obj_hdulist,
             return spec
 
 
-    _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
-                         header=obj_hdulist['SCI.RAW'].header)
-    _x.name = "STEP2"
-    obj_hdulist.append(_x)
+    # _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
+    #                      header=obj_hdulist['SCI.RAW'].header)
+    # _x.name = "STEP2"
+    # obj_hdulist.append(_x)
 
 
     logger.info("Computing spline using optimized sampling and outlier rejection")
@@ -350,10 +352,10 @@ def optimal_sky_subtraction(obj_hdulist,
         logger.info("Done with iteration %d (%d pixels left)" % (iteration+1, good_data.shape[0]))
 
 
-    _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
-                         header=obj_hdulist['SCI.RAW'].header)
-    _x.name = "STEP3"
-    obj_hdulist.append(_x)
+    # _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
+    #                      header=obj_hdulist['SCI.RAW'].header)
+    # _x.name = "STEP3"
+    # obj_hdulist.append(_x)
 
     if (compare):
         #
