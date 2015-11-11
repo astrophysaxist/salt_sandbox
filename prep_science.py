@@ -201,11 +201,11 @@ def filter_isolate_skylines(data, write_debug_data=False):
     return skylines, data_filtered
 
 
-def extract_skyline_intensity_profile(hdulist, data, wls=None):
+def extract_skyline_intensity_profile(hdulist, data, wls=None, write_debug_data=False):
 
     logger = logging.getLogger("NightskyFlats")
 
-    skylines, continuum = filter_isolate_skylines(data)
+    skylines, continuum = filter_isolate_skylines(data, write_debug_data=write_debug_data)
 
     #
     # Now find lines
@@ -245,7 +245,7 @@ def extract_skyline_intensity_profile(hdulist, data, wls=None):
             hdulist, 
             lines, 
             data=data,
-            write_debug_data=True,
+            write_debug_data=write_debug_data,
             tracewidth=25,
             n_lines_max=5,
         )
@@ -310,7 +310,8 @@ if __name__ == "__main__":
     for i in range(n_params):
         wls_fit[i] = hdulist[0].header['WLSFIT_%d' % (i)]
 
-    skylines, lines, profile = extract_skyline_intensity_profile(hdulist, data, wls=wls_fit)
+    skylines, lines, profile = extract_skyline_intensity_profile(
+        hdulist, data, wls=wls_fit, write_debug_data=True)
 
     for i in range(2):
         fn = "skyline_%02d.fits" % (i+1)
