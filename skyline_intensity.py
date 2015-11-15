@@ -36,6 +36,7 @@ def find_skyline_profiles(hdulist, skyline_list, data=None,
                           write_debug_data=False, 
                           tracewidth=10,
                           use_coords='pixel',
+                          line=-1,
                           n_lines_max=15,
                           min_signal_to_noise=10,
 ):
@@ -46,7 +47,8 @@ def find_skyline_profiles(hdulist, skyline_list, data=None,
     if (data == None):
         data = hdulist['SCI.RAW'].data
 
-    line = int(data.shape[0]/2)
+    if (line < 0):
+        line = int(data.shape[0]/2)
 
     if (use_coords == 'pixel'):
         pass
@@ -113,10 +115,12 @@ def find_skyline_profiles(hdulist, skyline_list, data=None,
         medstd = compute_local_median_std(tracedata, intensity)
 
         if (write_debug_data):
-            numpy.savetxt("sky_trace.%d" % (idx+1),
+            fn = "sky_trace.%d" % (idx+1)
+            numpy.savetxt(fn,
                           numpy.append(tracedata,
                                        intensity.reshape((-1,1)), axis=1))
-    
+            logger.info("Writing tracedata to %s" % (fn))
+
         combined = numpy.empty((tracedata.shape[0], tracedata.shape[1]+3))
         combined[:,:tracedata.shape[1]] = tracedata[:]
         combined[:,tracedata.shape[1]] = intensity[:]
