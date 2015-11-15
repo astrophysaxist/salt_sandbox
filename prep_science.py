@@ -16,6 +16,8 @@ from wlcal import lineinfo_colidx
 
 import pysalt.mp_logging
 
+import matplotlib.pyplot as pyplot
+
 def compute_smoothed_profile(data_x, data_y, 
                              n_iterations=3,
                              n_max_neighbors=100, # pixels
@@ -201,7 +203,11 @@ def filter_isolate_skylines(data, write_debug_data=False):
     return skylines, data_filtered
 
 
-def extract_skyline_intensity_profile(hdulist, data, wls=None, write_debug_data=False):
+def extract_skyline_intensity_profile(
+        hdulist, data, wls=None, 
+        plot_filename=None,
+        use_as_trace_data='skylines',
+        write_debug_data=False):
 
     logger = logging.getLogger("NightskyFlats")
 
@@ -240,11 +246,16 @@ def extract_skyline_intensity_profile(hdulist, data, wls=None, write_debug_data=
 
     #
     logger.info("Tracing emission line intensity profile")
+
+    tracedata = data
+    if (use_as_trace_data == 'skylines'):
+        tracedata = skylines
     weighted_avg, blkavg, blkmedian = \
         skyline_intensity.find_skyline_profiles(
             hdulist, 
             lines, 
-            data=data,
+            line=610,
+            data=tracedata,
             write_debug_data=write_debug_data,
             tracewidth=25,
             n_lines_max=5,
@@ -267,8 +278,8 @@ def extract_skyline_intensity_profile(hdulist, data, wls=None, write_debug_data=
 
     data_x = numpy.arange(weighted_avg.shape[0])
     intensity_profile = compute_smoothed_profile(data_x=data_x, 
-                                                data_y=weighted_avg, 
-                                                n_iterations=3,
+                                                 data_y=weighted_avg, 
+                                                 n_iterations=3,
                                             )
     numpy.savetxt("intensity_profile", intensity_profile)
 
@@ -287,6 +298,19 @@ def extract_skyline_intensity_profile(hdulist, data, wls=None, write_debug_data=
     pyfits.PrimaryHDU(
         data=data/intensity_profile.reshape((-1,1))).writeto(
             "flat_data.fits", clobber=True)
+
+    if (not plot_filename == None):
+        logger.debug("Creating diagnostic plot for the line intensity profile")
+        fig = pyplot.figure()
+        ax = fig.add_subplot(111)
+        ax.plot(weighted_avg, "-", c='blue')
+        ax.plot(intensity_profile, "-", c='white', linewidth=3)
+        ax.plot(intensity_profile, "-", c='black', linewidth=1)
+        ax.set_xlabel("Position along slit")
+        ax.set_ylabel("Relative intensity")
+        ax.set_xlim((-0.03*weighted_avg.shape[0], 1.03*weighted_avg.shape[0]))
+        fig.savefig(plot_filename)
+
 
     #
     # Return results
@@ -310,8 +334,11 @@ if __name__ == "__main__":
     for i in range(n_params):
         wls_fit[i] = hdulist[0].header['WLSFIT_%d' % (i)]
 
+        
     skylines, lines, profile = extract_skyline_intensity_profile(
-        hdulist, data, wls=wls_fit, write_debug_data=True)
+        hdulist, data, wls=wls_fit, write_debug_data=True,
+        use_as_trace_data='skylines',
+        plot_filename="slitprofile.png")
 
     for i in range(2):
         fn = "skyline_%02d.fits" % (i+1)
