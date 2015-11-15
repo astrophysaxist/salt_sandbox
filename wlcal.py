@@ -746,9 +746,10 @@ def find_wavelength_solution(filename, line):
     # Now select only lines that are in the estimated range of our ARC spectrum
     #
     in_range = (lines[:,0] > numpy.min(wl)) & (lines[:,0] < numpy.max(wl))
-    ref_lines = lines[in_range]
-    logger.debug("Found these lines for fitting:\n%s" % (
-            "\n".join(["%10.4f" % l for l in ref_lines[:,0]])))
+    ref_lines = lines #[in_range]
+    logger.debug("Found these lines for fitting (range: %.2f -- %.2f):\n%s" % (
+        numpy.min(wl), numpy.max(wl), 
+        "\n".join(["%10.4f" % l for l in ref_lines[:,0]])))
     #print ref_lines
 
     ############################################################################
