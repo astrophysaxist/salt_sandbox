@@ -556,7 +556,10 @@ def specred(rawdir, prodir,
     #
     logger.info("Creating a master flat-field frame")
     flatfield_filenames = []
-    flatfield_hdus = []
+    flatfield_hdus = {}
+    first_flat = None
+    flatfield_list = {}
+
     for idx, filename in enumerate(obslog['FLAT']):
         hdulist = pyfits.open(filename)
         if (hdulist[0].header['OBSTYPE'].find("FLAT") >= 0 and
@@ -564,18 +567,107 @@ def specred(rawdir, prodir,
             #
             # This is a flat-field
             #
-            flatfield_filenames.append(filename)
+
+            #
+            # Get some parameters so we can create flatfields for each specific
+            # instrument configuration
+            #
+            grating = hdulist[0].header['GRATING']
+            grating_angle = hdulist[0].header['GR-ANGLE']
+            grating_tilt = hdulist[0].header['GRTILT']
+            binning = "x".join(hdulist[0].header['CCDSUM'].split())
+
+            if (not grating in flatfield_list):
+                flatfield_list[grating] = {}
+            if (not grating_angle in flatfield_list[grating]):
+                flatfield_list[grating][grating_angle] = {}    
+            if (not grating_tilt in flatfield_list[grating][grating_angle]):
+                flatfield_list[grating][grating_angle][grating_tilt] = {}    
+            if (not binning in flatfield_list[grating][grating_angle][grating_tilt]):
+                flatfield_list[grating][grating_angle][grating_tilt][binning] = []
+
+            flatfield_list[grating][grating_angle][grating_tilt][binning].append(filename)
             
-            hdu = salt_prepdata(filename, badpixelimage=None, create_variance=False, 
-                                verbose=False)
-            flatfield_hdus.append(hdu)
+    for grating in flatfield_list:
+        for grating_angle in flatfield_list[grating]:
+            for grating_tilt in flatfield_list[grating][grating_angle]:
+                for binning in flatfield_list[grating][grating_angle][grating_tilt]:
+
+                    filelist = flatfield_list[grating][grating_angle][grating_tilt][binning]
+                    flatfield_hdus = {}
+
+                    logger.info("Creating master flatfield for %s (%.3f/%.3f), %s (%d frames)" % (
+                        grating, grating_angle, grating_tilt, binning, len(filelist)))
+
+                    for filename in filelist:
+
+                        _, fb = os.path.split(filename)
+                        single_flat = "flat_%s" % (fb)
+
+                        hdu = salt_prepdata(filename, 
+                                            badpixelimage=None, 
+                                            create_variance=True,
+                                            clean_cosmics=False,
+                                            mosaic=False,
+                                            verbose=False)
+                        pysalt.clobberfile(single_flat)
+                        hdu.writeto(single_flat, clobber=True)
+                        logger.info("Wrote single flatfield to %s" % (single_flat))
+
+                        for extid, ext in enumerate(hdu):
+                            if (ext.name == "SCI"):
+                                # Only use the science extensions, leave everything else 
+                                # untouched: Apply a one-dimensional median filter to take 
+                                # out spectral slope. We can then divide the raw data by this 
+                                # median flat to isolate pixel-by-pixel variations
+                                filtered = scipy.ndimage.filters.median_filter(
+                                    input=ext.data, 
+                                    size=(1,25), 
+                                    footprint=None, 
+                                    output=None, 
+                                    mode='reflect', 
+                                    cval=0.0, 
+                                    origin=0)
+                                ext.data /= filtered
+
+                                if (not extid in flatfield_hdus):
+                                    flatfield_hdus[extid] = []
+                                flatfield_hdus[extid].append(ext.data)
+
+                        single_flat = "norm"+single_flat
+                        pysalt.clobberfile(single_flat)
+                        hdu.writeto(single_flat, clobber=True)
+                        logger.info("Wrote normalized flatfield to %s" % (single_flat))
+
+                        if (first_flat == None):
+                            first_flat = hdulist
+
+                    print first_flat
+
+                    if (len(filelist) <= 0):
+                        continue
+
+                    # Combine all flat-fields into a single master-flat
+                    for extid in flatfield_hdus:
+                        flatstack = flatfield_hdus[extid]
+                        print "EXT",extid,"-->",flatstack
+                        logger.info("Ext %d: %d flats" % (extid, len(flatstack)))
+                        flatstack = numpy.array(flatstack)
+                        print flatstack.shape
+                        avg_flat = numpy.mean(flatstack, axis=0)
+                        print "avg:", avg_flat.shape
+                        
+                        first_flat[extid].data = avg_flat
+
+                    masterflat_filename = "flat__%s_%.3f_%.3f_%s.fits" % (
+                        grating, grating_angle, grating_tilt, binning)
+                    pysalt.clobberfile(masterflat_filename)
+                    first_flat.writeto(masterflat_filename, clobber=True)
+
+            # # hdu = salt_prepdata(filename, badpixelimage=None, create_variance=False, 
+            # #                     verbose=False)
+            # # flatfield_hdus.append(hdu)
         
-    if (len(obslog['FLAT']) > 0):
-        # We have some flat-field files
-        # run some combination method
-        pass
-
-
     #############################################################################
     #
     # Determine a wavelength solution from ARC frames, where available
@@ -722,8 +814,18 @@ def specred(rawdir, prodir,
         mosaic_filename = "OBJ_raw__%s" % (fb)
         out_filename = "OBJ_%s" % (fb)
 
+        grating = hdulist[0].header['GRATING']
+        grating_angle = hdulist[0].header['GR-ANGLE']
+        grating_tilt = hdulist[0].header['GRTILT']
+        binning = "x".join(hdulist[0].header['CCDSUM'].split())
+        masterflat_filename = "flat__%s_%.3f_%.3f_%s.fits" % (
+            grating, grating_angle, grating_tilt, binning)
+        if (not os.path.isfile(masterflat_filename)):
+            masterflat_filename = None
+
         logger.info("Creating mosaic for frame %s --> %s" % (fb, mosaic_filename))
         hdu = salt_prepdata(filename, 
+                            flatfield_frame = masterflat_filename,
                             badpixelimage=None, 
                             create_variance=True, 
                             clean_cosmics=True,
@@ -740,6 +842,7 @@ def specred(rawdir, prodir,
         # output file
         #
         hdu_nocrj = salt_prepdata(filename, 
+                            flatfield_frame = masterflat_filename,
                             badpixelimage=None, 
                             create_variance=True, 
                             clean_cosmics=False,
@@ -817,11 +920,14 @@ def specred(rawdir, prodir,
         # correct the data. This should also improve the quality of the extracted
         # 2-D sky.
         #
+        plot_filename = "%s_slitprofile.png" % (fb)
         skylines, skyline_list, intensity_profile = \
             prep_science.extract_skyline_intensity_profile(
                 hdulist=hdu, 
                 data=hdu['SCI.RAW'].data,
-                wls=wls_fit)
+                wls=wls_fit,
+                plot_filename=plot_filename,
+            )
         # Flatten the science frame using the line profile
         hdu.append(
             pyfits.ImageHDU(
