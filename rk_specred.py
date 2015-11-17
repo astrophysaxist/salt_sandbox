@@ -68,6 +68,7 @@ import pyfits
 import pysalt.mp_logging
 import logging
 import numpy
+import pickle
 
 #
 # Ralf Kotulla modules
@@ -419,7 +420,7 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
     if (not flatfield_frame == None and os.path.isfile(flatfield_frame)):
         logger.debug("Applying flatfield")
         flathdu = pyfits.open(flatfield_frame)
-        pysalt.specred.saltflat.flat(
+        pysalt.saltred.saltflat.flat(
             struct=hdulist, #input
             fstruct=flathdu, # flatfield
             )
@@ -677,8 +678,6 @@ def specred(rawdir, prodir,
             # #                     verbose=False)
             # # flatfield_hdus.append(hdu)
         
-    return
-
     #############################################################################
     #
     # Determine a wavelength solution from ARC frames, where available
@@ -805,7 +804,11 @@ def specred(rawdir, prodir,
 
 
     #return
-    
+
+    with open("flatlist", "w") as picklefile:
+        pickle.dump(flatfield_list, picklefile)
+    print "\nPICKLE done"*10
+
     #############################################################################
     #
     # Now apply wavelength solution found above to your data frames
@@ -829,8 +832,34 @@ def specred(rawdir, prodir,
         grating_angle = hdulist[0].header['GR-ANGLE']
         grating_tilt = hdulist[0].header['GRTILT']
         binning = "x".join(hdulist[0].header['CCDSUM'].split())
-        masterflat_filename = "flat__%s_%.3f_%.3f_%s.fits" % (
-            grating, grating_angle, grating_tilt, binning)
+
+        # Find the most appropriate flat-field
+        if (grating in flatfield_list):
+            if (binning in flatfield_list[grating]):
+                if (grating_tilt in flatfield_list[grating][binning]):
+                    _grating_tilt = grating_tilt
+                else:
+                    # We can handle flatfields with non-matching grating-tilts
+                    # make sure to pick the closest one
+                    grating_tilts = numpy.array(flatfield_list[grating][binning].keys())
+                    closest = numpy.argmin(numpy.fabs(grating_tilts - grating_tilt))
+                    _grating_tilt = grating_tilts[closest]
+                    
+                if (grating_angle in flatfield_list[grating][binning][_grating_tilt]):
+                    _grating_angle = grating_angle
+                else:
+                    grating_angles = numpy.array(flatfield_list[grating][binning][_grating_tilt].keys())
+                    closest = numpy.argmin(numpy.fabs(grating_angles - grating_angle))
+                    _grating_angle = grating_angles[closest]
+
+                masterflat_filename = "flat__%s_%s_%.3f_%.3f.fits" % (
+                    grating, binning, _grating_angle, _grating_tilt)
+                
+            else:
+                masterflat_filename = None
+        else:
+            masterflat_filename = None
+
         logger.info("FLATX: %s (%s, %f, %f, %s) = %s" % (
             masterflat_filename,
             grating, grating_angle, grating_tilt, binning, 
