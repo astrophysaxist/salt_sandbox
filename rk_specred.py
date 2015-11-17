@@ -415,10 +415,19 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
     #
     # Apply flat-field correction if requested
     #
-    if (not flatfield_frame == None):
+    logger.info("FLAT: %s" % (str(flatfield_frame)))
+    if (not flatfield_frame == None and os.path.isfile(flatfield_frame)):
         logger.debug("Applying flatfield")
+        flathdu = pyfits.open(flatfield_frame)
+        pysalt.specred.saltflat.flat(
+            struct=hdulist, #input
+            fstruct=flathdu, # flatfield
+            )
         #saltflat('xgbpP*fits', '', 'f', flatimage, minflat=500, clobber=True, logfile=logfile, verbose=True)
+        flathdu.close()
         logger.debug("done with flatfield")
+    else:
+        logger.debug("continuing without flat-field correction!")
 
     if (mosaic):
         logger.debug("Mosaicing all chips together")
@@ -579,21 +588,21 @@ def specred(rawdir, prodir,
 
             if (not grating in flatfield_list):
                 flatfield_list[grating] = {}
-            if (not grating_angle in flatfield_list[grating]):
-                flatfield_list[grating][grating_angle] = {}    
-            if (not grating_tilt in flatfield_list[grating][grating_angle]):
-                flatfield_list[grating][grating_angle][grating_tilt] = {}    
-            if (not binning in flatfield_list[grating][grating_angle][grating_tilt]):
-                flatfield_list[grating][grating_angle][grating_tilt][binning] = []
+            if (not binning in flatfield_list[grating]):
+                flatfield_list[grating][binning] = {}
+            if (not grating_tilt in flatfield_list[grating][binning]):
+                flatfield_list[grating][binning][grating_tilt] = {}    
+            if (not grating_angle in flatfield_list[grating][binning][grating_tilt]):
+                flatfield_list[grating][binning][grating_tilt][grating_angle] = []   
 
-            flatfield_list[grating][grating_angle][grating_tilt][binning].append(filename)
+            flatfield_list[grating][binning][grating_tilt][grating_angle].append(filename)
             
     for grating in flatfield_list:
-        for grating_angle in flatfield_list[grating]:
-            for grating_tilt in flatfield_list[grating][grating_angle]:
-                for binning in flatfield_list[grating][grating_angle][grating_tilt]:
+        for binning in flatfield_list[grating]:
+            for grating_tilt in flatfield_list[grating][binning]:
+                for grating_angle in flatfield_list[grating][binning][grating_tilt]:
 
-                    filelist = flatfield_list[grating][grating_angle][grating_tilt][binning]
+                    filelist = flatfield_list[grating][binning][grating_tilt][grating_angle]
                     flatfield_hdus = {}
 
                     logger.info("Creating master flatfield for %s (%.3f/%.3f), %s (%d frames)" % (
@@ -650,7 +659,7 @@ def specred(rawdir, prodir,
                     # Combine all flat-fields into a single master-flat
                     for extid in flatfield_hdus:
                         flatstack = flatfield_hdus[extid]
-                        print "EXT",extid,"-->",flatstack
+                        #print "EXT",extid,"-->",flatstack
                         logger.info("Ext %d: %d flats" % (extid, len(flatstack)))
                         flatstack = numpy.array(flatstack)
                         print flatstack.shape
@@ -659,8 +668,8 @@ def specred(rawdir, prodir,
                         
                         first_flat[extid].data = avg_flat
 
-                    masterflat_filename = "flat__%s_%.3f_%.3f_%s.fits" % (
-                        grating, grating_angle, grating_tilt, binning)
+                    masterflat_filename = "flat__%s_%s_%.3f_%.3f.fits" % (
+                        grating, binning, grating_tilt, grating_angle)
                     pysalt.clobberfile(masterflat_filename)
                     first_flat.writeto(masterflat_filename, clobber=True)
 
@@ -668,6 +677,8 @@ def specred(rawdir, prodir,
             # #                     verbose=False)
             # # flatfield_hdus.append(hdu)
         
+    return
+
     #############################################################################
     #
     # Determine a wavelength solution from ARC frames, where available
@@ -800,7 +811,7 @@ def specred(rawdir, prodir,
     # Now apply wavelength solution found above to your data frames
     #
     #############################################################################
-    logger.info("\n\n\nApplying wavelength solution to OBJECT frames")
+    logger.info("\n\n\nProcessing OBJECT frames")
     arcinfos = {}
     for idx, filename in enumerate(obslog['OBJECT']):
         _, fb = os.path.split(filename)
@@ -820,6 +831,11 @@ def specred(rawdir, prodir,
         binning = "x".join(hdulist[0].header['CCDSUM'].split())
         masterflat_filename = "flat__%s_%.3f_%.3f_%s.fits" % (
             grating, grating_angle, grating_tilt, binning)
+        logger.info("FLATX: %s (%s, %f, %f, %s) = %s" % (
+            masterflat_filename,
+            grating, grating_angle, grating_tilt, binning, 
+            filename)
+        )
         if (not os.path.isfile(masterflat_filename)):
             masterflat_filename = None
 
