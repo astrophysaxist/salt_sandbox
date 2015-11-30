@@ -79,7 +79,7 @@ def trace_arc(data,
     n_pixels_for_corner = 5
     
     for lines_since_start, next_row_idx in enumerate(row_numbers):
-        #logger.debug("Moving from row %4d to %4d" % (current_row_idx, next_row_idx))
+        logger.debug("Moving from row %4d to %4d" % (current_row_idx, next_row_idx))
 
         # extract a bunch of pixels in the next row around the position of the 
         # current peak
