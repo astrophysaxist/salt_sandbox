@@ -200,7 +200,7 @@ def trace_arc(data,
 
 
 
-def subpixel_centroid_trace(data, tracedata, width=5, dumpfile=None):
+def subpixel_centroid_trace(data, tracedata, width=5, dumpfile=None, return_all=False):
 
     logger = logging.getLogger("SubpixelCentroid")
 
@@ -256,6 +256,9 @@ def subpixel_centroid_trace(data, tracedata, width=5, dumpfile=None):
     background = idx_x * bg_slope.reshape((-1,1)) + bg_offset.reshape((-1,1))
     #print "background shape:", background.shape, data_sel.shape
 
+    # make a copy before we do the background subtraction
+    raw_data = data_sel.copy()
+
     # subtract off the background to avoid skewing the line center position in
     # the direction of the (potential) background slope
     data_sel -= background
@@ -275,9 +278,14 @@ def subpixel_centroid_trace(data, tracedata, width=5, dumpfile=None):
             # prepare a fits file with the rough-rectified line, with column numbers
             hdulist = pyfits.HDUList([
                 pyfits.PrimaryHDU(),
-                pyfits.ImageHDU(data=data_sel),
-                pyfits.ImageHDU(data=line_positions)])
+                pyfits.ImageHDU(data=data_sel,name='BGSUB'),
+                pyfits.ImageHDU(data=line_positions,name='POS'),
+                pyfits.ImageHDU(data=raw_data, name='RAW'),
+            ])
             hdulist.writeto(dumpfile, clobber=True)
+
+    if (return_all):
+        return weighted_center_x, integrated_intensity, raw_data, data_sel
 
     return weighted_center_x, integrated_intensity
 
