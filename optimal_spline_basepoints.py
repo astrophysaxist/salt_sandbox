@@ -9,7 +9,7 @@ import logging
 import bottleneck
 import wlcal
 import skyline_intensity
-
+import logging
 
 def satisfy_schoenberg_whitney(data, basepoints, k=3):
 
