@@ -34,6 +34,57 @@ from helpers import *
 
 createdebugfiles = True
 
+def find_chip_gaps(hdulist):
+    
+    # use the variance map.
+    try:
+        data = hdulist['VAR'].data
+    except:
+        # if this does not exist, fall back to using the 'SCI' extension
+        data = hdulist['SCI'].data
+
+    # take a block from the middle
+    size_y = data.shape[0]
+
+    bs = 25
+    centerstrip = data[size_y/2-bs:size_y/2+bs, :]
+
+    # add all data, ignoring nans
+    summed = bottleneck.nansum(centerstrip.astype(numpy.float32), axis=0)
+
+    gap = numpy.isnan(summed)
+    gapspec = numpy.zeros(summed.shape)
+    gapspec[gap] = 1
+
+    idx = numpy.arange(data.shape[1])
+
+    
+    in_gap = idx[gap]
+    no_gap = idx[~gap]
+   
+    gap_start = 0
+
+    gap_list = []
+    while (in_gap.size > 0):
+
+        # find the first pixel in a gap, i.e. with values of 1.0
+        gap_start = numpy.min(in_gap)
+        
+        no_gap = no_gap[no_gap > gap_start]
+        gap_end = numpy.min(no_gap) - 1
+
+        in_gap = in_gap[in_gap > gap_end]
+        
+        print gap_start, gap_end
+        gap_list.append([gap_start, gap_end])
+
+        print in_gap.size
+
+    gap_list = numpy.array(gap_list)
+
+    return gapspec, gap_list
+
+
 
 def trace_arc(data,
               start,
@@ -704,6 +755,7 @@ def compute_2d_wavelength_solution(arc_filename,
     logger.info("Applying %.1f pixel gauss filter in spectral dir" % (gauss_width))
     fitsdata_gf = scipy.ndimage.filters.gaussian_filter(fitsdata, (gauss_width,0), 
                                           mode='constant', cval=0,
+
                                           )
     fitsdata_gf[fitsdata <= 0] = numpy.NaN
     fitsdata[fitsdata <= 0] = numpy.NaN
