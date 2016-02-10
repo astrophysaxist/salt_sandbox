@@ -145,7 +145,7 @@ Column 7: flux calibration factor (col. 5 divided by col. 6)
 Column 8: Flux-calibrated output spectrum
 """
     print "saving results to %s" % (outfile)
-    numpy.savetxt(outfile, data_final, header=header)
+    numpy.savetxt(outfile+".dat", data_final, header=header)
                           
 
     fig = pyplot.figure()
@@ -163,3 +163,10 @@ Column 8: Flux-calibrated output spectrum
     fig.tight_layout()
     fig.set_size_inches((9,6))
     fig.savefig(outfile+".png", dpi=100)
+
+
+    #
+    # Save file as FITS file as well
+    #
+    hdu_list = pyfits.HDUList([pyfits.PrimaryHDU(data=data_final)])
+    hdu_list.writeto(outfile+".fits", clobber=True)
