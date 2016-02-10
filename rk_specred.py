@@ -860,13 +860,16 @@ def specred(rawdir, prodir,
         else:
             masterflat_filename = None
 
+        masterflat_filename = None
+
         logger.info("FLATX: %s (%s, %f, %f, %s) = %s" % (
-            masterflat_filename,
+            str(masterflat_filename),
             grating, grating_angle, grating_tilt, binning, 
             filename)
         )
-        if (not os.path.isfile(masterflat_filename)):
-            masterflat_filename = None
+        if (not masterflat_filename == None):
+            if (not os.path.isfile(masterflat_filename)):
+                masterflat_filename = None
 
         logger.info("Creating mosaic for frame %s --> %s" % (fb, mosaic_filename))
         hdu = salt_prepdata(filename, 
@@ -960,48 +963,49 @@ def specred(rawdir, prodir,
             
         hdu.append(pyfits.ImageHDU(data=wls_2d, name='WAVELENGTH'))
 
-        # 
-        # Extract the sky-line intensity profile along the slit. Use this to 
-        # correct the data. This should also improve the quality of the extracted
-        # 2-D sky.
-        #
-        plot_filename = "%s_slitprofile.png" % (fb)
-        skylines, skyline_list, intensity_profile = \
-            prep_science.extract_skyline_intensity_profile(
-                hdulist=hdu, 
-                data=hdu['SCI.RAW'].data,
-                wls=wls_fit,
-                plot_filename=plot_filename,
+        apply_skyline_intensity_flat = True
+        if (apply_skyline_intensity_flat):
+            # 
+            # Extract the sky-line intensity profile along the slit. Use this to 
+            # correct the data. This should also improve the quality of the extracted
+            # 2-D sky.
+            #
+            plot_filename = "%s_slitprofile.png" % (fb)
+            skylines, skyline_list, intensity_profile = \
+                prep_science.extract_skyline_intensity_profile(
+                    hdulist=hdu, 
+                    data=hdu['SCI.RAW'].data,
+                    wls=wls_fit,
+                    plot_filename=plot_filename,
+                )
+            # Flatten the science frame using the line profile
+            hdu.append(
+                pyfits.ImageHDU(
+                    data=hdu['SCI'].data, 
+                    header=hdu['SCI'].header, 
+                    name="SCI.PREFLAT"
+                )
             )
-        # Flatten the science frame using the line profile
-        hdu.append(
-            pyfits.ImageHDU(
-                data=hdu['SCI'].data, 
-                header=hdu['SCI'].header, 
-                name="SCI.PREFLAT"
+            hdu.append(
+                pyfits.ImageHDU(
+                    data=hdu['SCI'].data/intensity_profile.reshape((-1,1)), 
+                    header=hdu['SCI'].header, 
+                    name="SCI.POSTFLAT"
+                )
             )
-        )
-        hdu.append(
-            pyfits.ImageHDU(
-                data=hdu['SCI'].data/intensity_profile.reshape((-1,1)), 
-                header=hdu['SCI'].header, 
-                name="SCI.POSTFLAT"
-            )
-        )
 
-        #
-        # Mask out all regions with relative intensities below 0.1x max 
-        #
-        stats = scipy.stats.scoreatpercentile(intensity_profile, [50, 16,84, 2.5,97.5])
-        one_sigma = (stats[4] - stats[3]) / 4.
-        median = stats[0]
-        bad_region = intensity_profile < median-1*one_sigma
-        hdu['SCI'].data[bad_region] = numpy.NaN
-        intensity_profile[bad_region] = numpy.NaN
+            #
+            # Mask out all regions with relative intensities below 0.1x max 
+            #
+            stats = scipy.stats.scoreatpercentile(intensity_profile, [50, 16,84, 2.5,97.5])
+            one_sigma = (stats[4] - stats[3]) / 4.
+            median = stats[0]
+            bad_region = intensity_profile < median-1*one_sigma
+            hdu['SCI'].data[bad_region] = numpy.NaN
+            intensity_profile[bad_region] = numpy.NaN
 
-
-        # hdu['SCI'].data /= intensity_profile.reshape((-1,1))
-        # logger.info("Slit-flattened SCI extension")
+            hdu['SCI'].data /= intensity_profile.reshape((-1,1))
+            logger.info("Slit-flattened SCI extension")
 
         # #
         # # Now go ahead and extract the full 2-d sky
@@ -1056,14 +1060,20 @@ def specred(rawdir, prodir,
 
         # logger.info("Creating spatial flatfield from sky-line intensity profiles")
         # i, ia, im = skyline_intensity.find_skyline_profiles(hdu, skyline_list)
+
     
+        if (apply_skyline_intensity_flat):
+            skyline_flat = intensity_profile.reshape((-1,1))
+        else:
+            skyline_flat = None
+
         sky_2d, spline = optimalskysub.optimal_sky_subtraction(
             hdu, 
             sky_regions=sky_regions,
             N_points=10000,
             iterate=False,
             skiplength=5,
-            skyline_flat=intensity_profile.reshape((-1,1)),
+            skyline_flat=skyline_flat, #intensity_profile.reshape((-1,1)),
         )
 
 
