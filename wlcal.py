@@ -321,7 +321,9 @@ def find_list_of_lines(spec, readnoise=2, gain=1, avg_width=1, pre_smooth=None):
         spec = scipy.ndimage.filters.gaussian_filter(
             input=spec, sigma=pre_smooth, 
             order=0, output=None, 
-            mode='constant', cval=0.0, truncate=3.0)
+            mode='constant', cval=0.0, 
+#            truncate=3.0,
+        )
         numpy.savetxt("spec_presmoothed", spec)
 
     peak = numpy.empty(spec.shape, dtype=numpy.bool)
