@@ -3,6 +3,8 @@
 import os, sys, numpy, scipy, pyfits
 
 import scipy.ndimage
+import scipy.stats
+import scipy.signal
 
 import pysalt
 
@@ -10,16 +12,13 @@ import logging
 import bottleneck
 
 
-if __name__ == "__main__":
+def continuum_slit_profile(hdulist, data_ext='SKYSUB.OPT', sky_ext='SKYSUB.IMG'):
 
-    logger_setup = pysalt.mp_logging.setup_logging()
-    logger = logging.getLogger("MAIN")
+    logger = logging.getLogger("ContSlitProfile")
 
-    hdulist = pyfits.open(sys.argv[1])
-    
-    data = hdulist['SKYSUB.OPT'].data.copy()
+    data = hdulist[data_ext].data.copy()
     wl = hdulist['WAVELENGTH'].data
-    sky = hdulist['SKYSUB.IMG'].data
+    sky = hdulist[sky_ext].data
 
     y = data.shape[0]/2
     #sky1d = sky[y:y+1,:] #.reshape((-1,1))
@@ -147,4 +146,143 @@ if __name__ == "__main__":
     # Apply wide median filter to subtract continuum slope (if any)
     #
 
+    return intensity_profile
+
+
+def identify_sources(profile):
+
+    logger = logging.getLogger("IdentifySources")
+
+    #
+    # Smooth profile to get rid of noise spikes
+    #
+    gauss_width = 1
+    logger.info("Applying %.1f pixel gauss filter in spectral dir" % (gauss_width))
+
+    smoothed = scipy.ndimage.filters.gaussian_filter(profile.reshape((-1,1)), (gauss_width,0), 
+                                                        mode='constant', cval=0,
+    )
+
+    #
+    # Approximate a continuum by applying a wider median filter
+    #
+    cont = scipy.ndimage.filters.median_filter(
+        input=prof, 
+        size=(75), 
+        footprint=None, 
+        output=None, 
+        mode='reflect', 
+        cval=0.0, 
+        origin=0)
+    
+    numpy.savetxt("prof.gauss1", smoothed)
+    numpy.savetxt("prof.cont", cont)
+
+    signal = prof - cont
+    smooth_signal = (smoothed[:,0] - cont)
+
+    #
+    # Get a noise-estimate by iteratively rejecting strong features
+    #
+    for iter in range(3):
+        stats = scipy.stats.scoreatpercentile(signal, [16,50,84], limit=[-1e9,1e9])
+        one_sigma = (stats[2] - stats[0]) / 2.
+        median = stats[1]
+        print iter, stats
+        # mask all pixels outside the 3-sigma range as bad
+        bad = (signal > (median + 3*one_sigma)) | (signal < (median - 3*one_sigma))
+        signal[bad] = numpy.NaN
+        numpy.savetxt("signal.%d" % (iter+1), signal)
+
+    #
+    # Now we have the noise level, so we can determine where true (or truish) 
+    # sources are
+    #
+    noise_level = numpy.var(signal[numpy.isfinite(signal)])
+    print one_sigma, noise_level
+
+    peaks = scipy.signal.find_peaks_cwt(
+        vector=(smoothed[:,0]-cont), 
+        widths=numpy.array([5]), 
+        wavelet=None, 
+        max_distances=None, 
+        gap_thresh=None, 
+        min_length=None, 
+        min_snr=2, 
+        noise_perc=10,
+        )
+    peaks = numpy.array(peaks)
+    print peaks
+    
+    #
+    # Now we have a bunch of potential sources
+    # make sure they are significant enough
+    #
+    peak_intensities = smooth_signal[peaks]
+    print peak_intensities
+    s2n = peak_intensities / noise_level
+    print s2n
+
+    # above threshold
+    significant = (s2n > 3.)
+    threshold = 3 * noise_level
+    print significant
+
+    print type(peaks)
+
+    print "final list of peaks:", peaks[significant]
+    sources = peaks[significant]
+
+    #
+    # Compute slope product to test for slope continuity
+    #
+    padded = numpy.zeros((smooth_signal.shape[0]+2))
+    padded[1:-1] = smooth_signal
+    d1 = padded[1:-1] - padded[0:-2]
+    d2 = padded[1:-1] - padded[2:]
+    slope_product = d1 * d2
+    numpy.savetxt("prof.slopeprod", slope_product)
+
+    
+    #
+    # Now use the slope product to find the maximum extent of each source
+    # 
+    # To be considered the edge of a source, the pixel intensity needs to 
+    # be BELOW the significance threshold, and the slope-product has to be 
+    # POSITIVE to mark an upward-trend following a downward-slope or vice versa
+    #
+    source_stats = numpy.empty((sources.shape[0],4))
+    source_stats[:,0] = sources[:]
+    source_stats[:,1] = s2n[significant]
+
+    pixel_coord = numpy.arange(smooth_signal.shape[0])
+    for si, source in enumerate(sources):
+        print source
+        out_of_source = (smooth_signal < threshold) & (slope_product > 0)
+
+        on_left = pixel_coord < source
+        on_right = pixel_coord > source
+        left = numpy.max(pixel_coord[out_of_source & on_left])
+        right = numpy.min(pixel_coord[out_of_source & on_right])
+        print left, right
+        print
+
+        source_stats[si, 2:4] = [left, right]
+
+    numpy.savetxt(sys.stdout, source_stats, "%.1f")
+
+    return None
+
+if __name__ == "__main__":
+
+    logger_setup = pysalt.mp_logging.setup_logging()
+    logger = logging.getLogger("MAIN")
+
+    hdulist = pyfits.open(sys.argv[1])
+
+    prof = continuum_slit_profile(hdulist)
+    sources = identify_sources(prof)
+
+
     pysalt.mp_logging.shutdown_logging(logger_setup)
+
