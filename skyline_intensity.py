@@ -39,6 +39,7 @@ def find_skyline_profiles(hdulist, skyline_list, data=None,
                           line=-1,
                           n_lines_max=15,
                           min_signal_to_noise=10,
+                          max_intensity=25000,
 ):
 
 
@@ -60,6 +61,18 @@ def find_skyline_profiles(hdulist, skyline_list, data=None,
     line_wl = wl[line,:]
 
     print line_wl
+
+    #
+    # Pick lines that are separated from each other to avoid confusion
+    #
+    good_lines = traceline.pick_line_every_separation(
+        skyline_list,
+        trace_every=5,
+        min_line_separation=40,
+        n_pixels=wl.shape[1],
+        min_signal_to_noise=10,
+        )
+    skyline_list = skyline_list[good_lines]
 
     s2n_sort = numpy.argsort(skyline_list[:,4])[::-1]
     skyline_list = skyline_list[s2n_sort]
@@ -105,10 +118,13 @@ def find_skyline_profiles(hdulist, skyline_list, data=None,
             closest.reshape((-1,1)), 
             axis=1)
 
-        pos, intensity = traceline.subpixel_centroid_trace(
+        pos, intensity, linedata, bgsubdata = traceline.subpixel_centroid_trace(
             data, tracedata, width=tracewidth, 
-            dumpfile="skyline_%02d.fits" % (idx+1) if write_debug_data else None)
+            dumpfile="skyline_%02d.fits" % (idx+1) if write_debug_data else None,
+            return_all=True)
 
+        raw_flux = bottleneck.nansum(linedata, axis=1)
+        
         #
         # Now compute the local standard deviation around each pixel
         #
@@ -121,10 +137,13 @@ def find_skyline_profiles(hdulist, skyline_list, data=None,
                                        intensity.reshape((-1,1)), axis=1))
             logger.info("Writing tracedata to %s" % (fn))
 
-        combined = numpy.empty((tracedata.shape[0], tracedata.shape[1]+3))
+        combined = numpy.empty((tracedata.shape[0], tracedata.shape[1]+5))
         combined[:,:tracedata.shape[1]] = tracedata[:]
         combined[:,tracedata.shape[1]] = intensity[:]
+        combined[:,tracedata.shape[1]+1] = raw_flux
+        combined[:,tracedata.shape[1]+2] = bottleneck.nanmax(linedata, axis=1)
         combined[:,-2:] = medstd[:]
+        
         numpy.savetxt("sky_trace_comb.%d" % (idx+1), combined)    
 
         #
