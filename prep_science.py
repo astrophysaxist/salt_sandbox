@@ -5,6 +5,7 @@ import warnings
 import os, sys, scipy, scipy.stats, scipy.ndimage, pyfits, numpy
 import wlcal
 import skyline_intensity
+import traceline
 
 from optimal_spline_basepoints import satisfy_schoenberg_whitney
 import bottleneck
@@ -202,6 +203,36 @@ def filter_isolate_skylines(data, write_debug_data=False):
 
     return skylines, data_filtered
 
+def exclude_lines_close_to_chipgaps(
+        chipgaps, 
+        lines, 
+        zoe=50, # zone of exclusion
+        ):
+
+    pos_x = lines[:,lineinfo_colidx['PIXELPOS']]
+
+    close_to_gap = numpy.zeros(lines.shape[0], dtype=numpy.bool)
+    # print close_to_gap
+
+    # print 
+
+    for idx, gap in enumerate(chipgaps):#range(gaplist.shape[0]):
+        #print gap
+        close_to_this_gap = (pos_x > (gap[0] - zoe)) & \
+                            (pos_x < (gap[1] + zoe))
+        #print close_to_this_gap
+
+        close_to_gap = close_to_gap | close_to_this_gap
+
+        #print
+
+    #print pos_x[close_to_gap]
+
+    return lines[~close_to_gap]
+
+
+
+
 
 def extract_skyline_intensity_profile(
         hdulist, data, wls=None, 
@@ -224,9 +255,19 @@ def extract_skyline_intensity_profile(
     #wlcal.extract_arc_spectrum(fake_hdu, line=600,avg_width=30)
     
     
-
     lines = wlcal.find_list_of_lines(nightsky_spec_1d, readnoise=2, avg_width=20,
                                      pre_smooth=2)
+    print lines
+
+    #
+    # Eliminate all lines close to (within 50 pixels) any of the chip gaps
+    #
+    gapspec, chipgaps = traceline.find_chip_gaps(hdulist)
+    lines = exclude_lines_close_to_chipgaps(
+        chipgaps=chipgaps,
+        lines=lines,
+        zoe=50,
+        )
 
     if (not wls == None):
         # We have a valid wavelength calibration, so convert pixel 
@@ -327,23 +368,70 @@ if __name__ == "__main__":
     filename = sys.argv[1]
     hdulist = pyfits.open(filename)
 
-    data = hdulist['SCI.RAW'].data
-
     n_params = hdulist[0].header['WLSFIT_N']
     wls_fit = numpy.zeros(n_params)
     for i in range(n_params):
         wls_fit[i] = hdulist[0].header['WLSFIT_%d' % (i)]
 
-        
-    skylines, lines, profile = extract_skyline_intensity_profile(
-        hdulist, data, wls=wls_fit, write_debug_data=True,
-        use_as_trace_data='skylines',
-        plot_filename="slitprofile.png")
+    for iteration in range(3):
 
-    for i in range(2):
-        fn = "skyline_%02d.fits" % (i+1)
-        h = pyfits.open(fn)
-        h[1].data /= profile.reshape((-1,1))
-        h.writeto(fn[:-5]+".flat.fits", clobber=True)
+        data = hdulist['SCI.RAW'].data
+
+        pyfits.PrimaryHDU(data=hdulist['SCI.RAW'].data).writeto(
+            "skyflattened_pre%d.fits" % (iteration+1), clobber=True)
+
+        skylines, lines, profile = extract_skyline_intensity_profile(
+            hdulist, data, wls=wls_fit, write_debug_data=True,
+            use_as_trace_data='skylines',
+            plot_filename="slitprofile_%d.png" % (iteration+1))
+
+        for i in range(10):
+            src = "skyline_%02d.fits" % (i+1)
+            dst = "skyline_%02d_iter%d.fits" % (i+1, iteration+1)
+            pysalt.clobberfile(dst)
+            try:
+                os.rename(src, dst)
+            except:
+                pass
+
+
+        for i in range(10):
+            src = "sky_trace_comb.%d" % (i+1)
+            dst = "sky_trace_comb_iter%d.%d" % (iteration+1, i+1)
+            pysalt.clobberfile(dst)
+            try:
+                os.rename(src, dst)
+            except:
+                pass
+
+        for i in range(10):
+            src = "sky_trace.%d" % (i+1)
+            dst = "sky_trace_iter%d.%d" % (iteration+1, i+1)
+            pysalt.clobberfile(dst)
+            try:
+                os.rename(src, dst)
+            except:
+                pass
+
+        try:
+            pysalt.clobberfile("sky_trace_iter%d.wavg" % (iteration+1))
+            os.rename("sky_trace.wavg", "sky_trace_iter%d.wavg" % (iteration+1))
+        except:
+            pass
+
+         # for i in range(2):
+         #    fn = "skyline_%02d_iter%d.fits" % (i+1, iteration+1)
+         #    h = pyfits.open(fn)
+         #    h[1].data /= profile.reshape((-1,1))
+         #    h.writeto(fn[:-5]+".flat.fits", clobber=True)
+
+        hdulist['SCI.RAW'].data /= profile.reshape((-1,1))
+
+        numpy.savetxt("skyflat_%d.txt" % (iteration+1), profile.reshape((-1,1)))
+
+        pyfits.PrimaryHDU(data=hdulist['SCI.RAW'].data).writeto(
+            "skyflattened_%d.fits" % (iteration+1), clobber=True)
+
+        break
 
     pysalt.mp_logging.shutdown_logging(logger_setup)
