@@ -26,7 +26,7 @@ numpy.seterr(divide='ignore', invalid='ignore')
 # Disable nasty and useless RankWarning when spline fitting
 import warnings
 warnings.simplefilter('ignore', numpy.RankWarning)
-warnings.simplefilter('ignore', pyfits.PyfitsDeprecationWarning)
+#warnings.simplefilter('ignore', pyfits.PyfitsDeprecationWarning)
 warnings.simplefilter('ignore', FutureWarning)
 warnings.simplefilter('ignore', UserWarning)
 # sys.path.insert(1, "/work/pysalt/")
