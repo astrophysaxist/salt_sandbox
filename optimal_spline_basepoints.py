@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import os, sys, pyfits, numpy
-import scipy, scipy.interpolate, scipy.spatial
+import scipy, scipy.interpolate, scipy.spatial, scipy.ndimage
 
 
 import pysalt.mp_logging
@@ -34,6 +34,59 @@ def satisfy_schoenberg_whitney(data, basepoints, k=3):
     return basepoints[~delete]
 
     
+def find_source_mask(img_data):
+
+    #
+    # Flatten image in wavelength direction
+    #
+    flat = bottleneck.nanmedian(img_data.astype(numpy.float32), axis=1)
+    print img_data.shape, flat.shape
+
+    numpy.savetxt("obj_mask.flat", flat)
+
+    median_level = numpy.median(flat)
+    print median_level
+
+
+    # do running median filter
+    med_filt = scipy.ndimage.filters.median_filter(flat.reshape((-1,1)), size=49, mode='mirror')[:,0]
+    numpy.savetxt("obj_mask.medfilt", med_filt)
+
+    excess = flat - med_filt
+    good = numpy.isfinite(excess, dtype=numpy.bool)
+    print good
+    print numpy.sum(good)
+
+    combined = numpy.append(numpy.arange(excess.shape[0]).reshape((-1,1)),
+                            excess.reshape((-1,1)), axis=1)
+    # compute noise
+
+    for i in range(3):
+        _med = numpy.median(excess[good])
+        _std = numpy.std(excess[good])
+        print _med, _std
+        good = (excess > _med-3*_std) & (excess < _med+3*_std)
+        print numpy.sum(good)
+        numpy.savetxt("obj_mask.filter%d" % (i+1), combined[good])
+        
+    source = ~good
+    print source
+
+    source_mask = scipy.ndimage.filters.convolve(
+        input=source, 
+        weights=numpy.ones((11)), 
+        output=None, 
+        mode='reflect', cval=0.0)
+    print source_mask
+    
+    numpy.savetxt("obj_mask.src", combined[source_mask])
+
+    return source_mask
+
+    pass
+
+
+
 
 def optimal_sky_subtraction(obj_hdulist, 
                             sky_regions=None,
@@ -43,6 +96,7 @@ def optimal_sky_subtraction(obj_hdulist,
                             iterate=False,
                             return_2d = True,
                             skiplength=5,
+                            mask_objects=True,
                             skyline_flat=None):
 
     logger = logging.getLogger("OptSplineKs")
@@ -51,8 +105,8 @@ def optimal_sky_subtraction(obj_hdulist,
     obj_data = obj_hdulist['SCI.RAW'].data
     obj_wl   = obj_hdulist['WAVELENGTH'].data
     obj_rms  = obj_hdulist['VAR'].data
-    obj_bpm  = obj_hdulist['BPM'].data.flatten()
 
+    pysalt.clobberfile("XXX.fits")
     obj_hdulist.writeto("XXX.fits", clobber=True)
 
     try:
@@ -68,6 +122,7 @@ def optimal_sky_subtraction(obj_hdulist,
     obj_cube[:,:,2] = obj_rms[:,:]
     obj_cube[:,:,3] = obj_spatial[:,:]
 
+    pysalt.clobberfile("data_preflat.fits")
     pyfits.PrimaryHDU(data=obj_cube[:,:,1]).writeto("data_preflat.fits", clobber=True)
 
     if (not type(skyline_flat) == type(None)):
@@ -77,7 +132,24 @@ def optimal_sky_subtraction(obj_hdulist,
         #return 1,2
         pass
 
+    pysalt.clobberfile("data_postflat.fits")
     pyfits.PrimaryHDU(data=obj_cube[:,:,1]).writeto("data_postflat.fits", clobber=True)
+
+    obj_bpm  = obj_hdulist['BPM'].data.flatten()
+    if (mask_objects):
+        source_mask = find_source_mask(obj_data)
+        obj_cube = obj_cube[~source_mask]
+
+        _x = numpy.array(obj_data)
+        _x[source_mask] = numpy.NaN
+        pysalt.clobberfile("obj_mask.fits")
+        pyfits.HDUList([
+            pyfits.PrimaryHDU(),
+            pyfits.ImageHDU(data=obj_data),
+            pyfits.ImageHDU(data=_x)]).writeto("obj_mask.fits")
+
+        obj_bpm  = obj_hdulist['BPM'].data[~source_mask].flatten()
+
 
     obj_cube = obj_cube.reshape((-1, obj_cube.shape[2]))
 
@@ -442,33 +514,37 @@ if __name__ == "__main__":
         user_sky = sys.argv[2]
         sky_regions = numpy.array([x.split(":") for x in user_sky.split(",")]).astype(numpy.int)
 
+    # obj_mask = find_source_mask(obj_hdulist['SCI.RAW'].data)
 
     simple_spec = optimal_sky_subtraction(obj_hdulist, 
                                           sky_regions=sky_regions,
                                           N_points=1000,
                                           iterate=False,
                                           skiplength=10, 
+                                          compare=True,
+                                          mask_objects=True,
                                           return_2d=False)
     numpy.savetxt("simple_spec", simple_spec)
 
-    skyline_list = wlcal.find_list_of_lines(simple_spec, readnoise=1, avg_width=1)
-    print skyline_list
 
-    i, ia, im = skyline_intensity.find_skyline_profiles(obj_hdulist, skyline_list)
+    # skyline_list = wlcal.find_list_of_lines(simple_spec, readnoise=1, avg_width=1)
+    # print skyline_list
+
+    # i, ia, im = skyline_intensity.find_skyline_profiles(obj_hdulist, skyline_list)
     
-    #numpy.savetxt("skyline_list", skyline_list)
+    # #numpy.savetxt("skyline_list", skyline_list)
 
 
-    sky_2d, spline = optimal_sky_subtraction(obj_hdulist, 
-                                             sky_regions=sky_regions,
-                                             N_points=1000,
-                                             iterate=False,
-                                             skiplength=5,
-                                             skyline_flat=ia)
+    # sky_2d, spline = optimal_sky_subtraction(obj_hdulist, 
+    #                                          sky_regions=sky_regions,
+    #                                          N_points=1000,
+    #                                          iterate=False,
+    #                                          skiplength=5,
+    #                                          skyline_flat=ia)
 
-    # # Now use the spline interpolator to create a list of strong skylines
-    # estimate_slit_intensity_variations(obj_hdulist, spline, sky_2d)
+    # # # Now use the spline interpolator to create a list of strong skylines
+    # # estimate_slit_intensity_variations(obj_hdulist, spline, sky_2d)
 
-    obj_hdulist.writeto(obj_fitsfile[:-5]+".optimized.fits", clobber=True)
+    # obj_hdulist.writeto(obj_fitsfile[:-5]+".optimized.fits", clobber=True)
 
     pysalt.mp_logging.shutdown_logging(logger_setup)
