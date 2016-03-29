@@ -137,6 +137,12 @@ def trace_arc(data,
 
         # Keep track of where the center position is
 
+        if ((current_col_idx-max_window_x < 0) or
+            (current_col_idx+max_window_x+1 >= data.shape[0])):
+            logger.warning("We have reached the edge (%d +/- %d vs %dx%d), aborting line-trace" % (
+                current_col_idx, max_window_x, data.shape[0], data.shape[1]))
+            break
+
         next_row = data[current_col_idx-max_window_x:current_col_idx+max_window_x+1,
                         next_row_idx]
 
@@ -583,7 +589,7 @@ def pick_line_every_separation(
             " ".join(["%d" % i for i in line_candidates[:, -1]]),
             ))
 
-        print line_candidates
+        # print line_candidates
         strong_line =  line_candidates[:, wlcal.lineinfo_colidx['S2N']] > min_signal_to_noise
             
         if (numpy.sum(strong_line) <= 0):
