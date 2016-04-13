@@ -381,16 +381,14 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
     else:
         crj_function = pysalt.saltred.saltcrclean.crclean
     if (clean_cosmics):
-        # hdulist = crj_function(hdulist, 
+        # hdulist = crj_function(hdulist,
         #                        crtype='edge', thresh=5, mbox=11, bthresh=5.0,
         #                        flux_ratio=0.2, bbox=25, gain=1.0, rdnoise=5.0, fthresh=5.0, bfactor=2,
         #                        gbox=3, maxiter=5)
 
-        gain = 1.5
-        readnoise = 6
 
         sigclip = 5.0
-        sigfrac = 0.3
+        sigfrac = 0.6
         objlim = 5.0
         saturation_limit=65000
 
@@ -398,6 +396,12 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
         # Loop over all SCI extensions
         for ext in hdulist:
             if (ext.name == 'SCI'):
+                with open("headers", "a") as h:
+                    print >>h, ext.header
+
+                gain = 1.5 if (not 'GAIN' in ext.header) else ext.header['GAIN']
+                readnoise = 3 if (not 'RDNOISE' in ext.header) else ext.header['RDNOISE']
+
                 crj = podi_cython.lacosmics(
                     ext.data.astype(numpy.float64), 
                     gain=gain, 
@@ -884,6 +888,7 @@ def specred(rawdir, prodir,
         logger.info("Writing mosaiced OBJ file to %s" % (mosaic_filename))
         hdu.writeto(mosaic_filename, clobber=True)
 
+        img_data = numpy.array(hdu['SCI'].data)
 
         #
         # Also create the image without cosmic ray rejection, and add it to the 
@@ -963,6 +968,8 @@ def specred(rawdir, prodir,
             
         hdu.append(pyfits.ImageHDU(data=wls_2d, name='WAVELENGTH'))
 
+        pyfits.PrimaryHDU(data=img_data).writeto("img0.fits", clobber=True)
+
         apply_skyline_intensity_flat = True
         if (apply_skyline_intensity_flat):
             # 
@@ -974,21 +981,21 @@ def specred(rawdir, prodir,
             skylines, skyline_list, intensity_profile = \
                 prep_science.extract_skyline_intensity_profile(
                     hdulist=hdu, 
-                    data=hdu['SCI.RAW'].data,
+                    data=numpy.array(hdu['SCI.RAW'].data),
                     wls=wls_fit,
                     plot_filename=plot_filename,
                 )
             # Flatten the science frame using the line profile
             hdu.append(
                 pyfits.ImageHDU(
-                    data=hdu['SCI'].data, 
+                    data=numpy.array(hdu['SCI'].data), 
                     header=hdu['SCI'].header, 
                     name="SCI.PREFLAT"
                 )
             )
             hdu.append(
                 pyfits.ImageHDU(
-                    data=hdu['SCI'].data/intensity_profile.reshape((-1,1)), 
+                    data=numpy.array(hdu['SCI'].data/intensity_profile.reshape((-1,1))), 
                     header=hdu['SCI'].header, 
                     name="SCI.POSTFLAT"
                 )
@@ -1000,12 +1007,23 @@ def specred(rawdir, prodir,
             stats = scipy.stats.scoreatpercentile(intensity_profile, [50, 16,84, 2.5,97.5])
             one_sigma = (stats[4] - stats[3]) / 4.
             median = stats[0]
-            bad_region = intensity_profile < median-1*one_sigma
+            bad_region = intensity_profile < median-2*one_sigma
             hdu['SCI'].data[bad_region] = numpy.NaN
             intensity_profile[bad_region] = numpy.NaN
 
             hdu['SCI'].data /= intensity_profile.reshape((-1,1))
             logger.info("Slit-flattened SCI extension")
+
+
+            y = img_data / intensity_profile.reshape((-1,1))
+            pyfits.PrimaryHDU(data=(y/img_data)).writeto("img1.fits", clobber=True)
+
+            #img_data /= intensity_profile.reshape((-1,1))
+
+        print "Adding xxx extension"
+        hdu.append(pyfits.ImageHDU(header=hdu['SCI'].header,
+                                   data=img_data,
+                                   name="XXX"))
 
         # #
         # # Now go ahead and extract the full 2-d sky
@@ -1070,11 +1088,48 @@ def specred(rawdir, prodir,
         sky_2d, spline = optimalskysub.optimal_sky_subtraction(
             hdu, 
             sky_regions=sky_regions,
-            N_points=10000,
+            N_points=2000,
             iterate=False,
             skiplength=5,
             skyline_flat=skyline_flat, #intensity_profile.reshape((-1,1)),
         )
+
+        
+        pyfits.PrimaryHDU(data=hdu['SCI.RAW'].data/skyline_flat).writeto("img_sky2d_input.fits", clobber=True)
+
+        pyfits.PrimaryHDU(data=sky_2d).writeto("img_sky2d.fits", clobber=True)
+
+        #
+        # Add here:
+        #
+        # Step 1:
+        # iteratively check the noise in and around sky-lines. Weight noise with
+        # the amplitude of the sky-spectrum. Then compute local (in ~ten bands 
+        # across the image) scaling factor that minimizes residuals. Take care 
+        # to mask out sources first. Then compute smooth scaling actor that yields
+        # the best overall sky subtraction.
+        #
+        # step 2: 
+        # Also consider small-scale gaussian smoothing to more closely match the
+        # sky-line profile along the slit.
+        #
+
+        skysub_img = (img_data) - (sky_2d * 0.9)
+        skysub_hdu = pyfits.ImageHDU(header=hdu['SCI'].header,
+                                     data=skysub_img,
+                                     name="SKYSUB.X")
+        hdu.append(skysub_hdu)
+
+        # skysub = obj_data - sky2d
+        # ss_hdu = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
+        #                          data=skysub)
+        # ss_hdu.name = "SKYSUB.OPT"
+        # obj_hdulist.append(ss_hdu)
+
+        # ss_hdu2 = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
+        #                          data=sky2d)
+        # ss_hdu2.name = "SKYSUB.IMG"
+        # obj_hdulist.append(ss_hdu2)
 
 
         #
