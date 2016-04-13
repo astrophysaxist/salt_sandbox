@@ -81,6 +81,7 @@ import optimal_spline_basepoints as optimalskysub
 import skyline_intensity
 import prep_science
 import podi_cython
+import optscale
 
 wlmap_fitorder = [2,2]
 
@@ -1109,12 +1110,18 @@ def specred(rawdir, prodir,
         # to mask out sources first. Then compute smooth scaling actor that yields
         # the best overall sky subtraction.
         #
+        
+        opt_sky_scaling = optscale.minimize_sky_residuals(
+            img_data, sky_2d, vert_size=5, smooth=20, debug_out=True)
+
+
+        #
         # step 2: 
         # Also consider small-scale gaussian smoothing to more closely match the
         # sky-line profile along the slit.
         #
 
-        skysub_img = (img_data) - (sky_2d * 0.9)
+        skysub_img = (img_data) - (sky_2d * opt_sky_scaling)
         skysub_hdu = pyfits.ImageHDU(header=hdu['SCI'].header,
                                      data=skysub_img,
                                      name="SKYSUB.X")

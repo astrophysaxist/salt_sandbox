@@ -15,21 +15,10 @@ def sky_residuals(p, imgslice, skyslice):
     res = (imgslice - ss) #* skyslice
     return res[numpy.isfinite(res)]
 
-if __name__ == "__main__":
-
-    img_fn = sys.argv[1]
-    img_hdu = pyfits.open(img_fn)
-
-    sky_fn = sys.argv[2]
-    sky_hdu = pyfits.open(sky_fn)
-
-    img = img_hdu[0].data
-
-    sky = sky_hdu[0].data
+def minimize_sky_residuals(img, sky, vert_size=5, smooth=20, debug_out=True):
 
     print img.shape, sky.shape
 
-    vert_size = 5
     n_slices = int(math.ceil(img.shape[0] / float(vert_size)))
     print n_slices
     
@@ -65,7 +54,7 @@ if __name__ == "__main__":
     #
     medfilt = scipy.ndimage.filters.median_filter(
         scaling_data[:,1],
-        20,
+        smooth,
         mode='wrap',
         )
     scaling_data[:,2] = medfilt[:]
@@ -80,11 +69,31 @@ if __name__ == "__main__":
         )
 
     full_profile = interp(numpy.arange(img.shape[0]))
-    numpy.savetxt("optscale.full", numpy.append(
-        numpy.arange(full_profile.shape[0]).reshape((-1,1)),
-        full_profile.reshape((-1,1)), axis=1))
 
-    img -= sky*full_profile.reshape((-1,1))
+    if (debug_out):
+        numpy.savetxt("optscale.full", numpy.append(
+            numpy.arange(full_profile.shape[0]).reshape((-1,1)),
+            full_profile.reshape((-1,1)), axis=1))
+        
+        numpy.savetxt("optscale.out", scaling_data)
+
+    return full_profile.reshape((-1,1))
+
+
+
+if __name__ == "__main__":
+
+    img_fn = sys.argv[1]
+    img_hdu = pyfits.open(img_fn)
+
+    sky_fn = sys.argv[2]
+    sky_hdu = pyfits.open(sky_fn)
+
+    img = img_hdu[0].data
+
+    sky = sky_hdu[0].data
+
+    full_profile = minimize_sky_residuals(img, sky, vert_size=5, smooth=20, debug_out=True)
+
+    skysub = img - (sky * full_profile)
     pyfits.PrimaryHDU(data=img).writeto(sys.argv[3], clobber=True)
-
-    numpy.savetxt("optscale.out", scaling_data)
