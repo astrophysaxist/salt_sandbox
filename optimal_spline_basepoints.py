@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import os, sys, pyfits, numpy
+import os, sys, pyfits, numpy, time
 import scipy, scipy.interpolate, scipy.spatial, scipy.ndimage
 
 
@@ -99,7 +99,8 @@ def optimal_sky_subtraction(obj_hdulist,
                             skiplength=5,
                             mask_objects=True,
                             add_edges=True,
-                            skyline_flat=None):
+                            skyline_flat=None,
+                            select_region=None):
 
     logger = logging.getLogger("OptSplineKs")
 
@@ -120,7 +121,7 @@ def optimal_sky_subtraction(obj_hdulist,
     # now merge all data frames into a single 3-d numpy array
     obj_cube = numpy.empty((obj_data.shape[0], obj_data.shape[1], 4))
     obj_cube[:,:,0] = obj_wl[:,:]
-    obj_cube[:,:,1] = obj_data[:,:]
+    obj_cube[:,:,1] = (obj_data*1.0)[:,:] 
     obj_cube[:,:,2] = obj_rms[:,:]
     obj_cube[:,:,3] = obj_spatial[:,:]
 
@@ -137,10 +138,31 @@ def optimal_sky_subtraction(obj_hdulist,
     pysalt.clobberfile("data_postflat.fits")
     pyfits.PrimaryHDU(data=obj_cube[:,:,1]).writeto("data_postflat.fits", clobber=True)
 
-    obj_bpm  = obj_hdulist['BPM'].data.flatten()
-    if (mask_objects):
-        source_mask = find_source_mask(obj_data)
-        obj_cube = obj_cube[~source_mask]
+    
+    # mask_objects = False
+    if (not mask_objects and select_region == None):
+        obj_bpm  = numpy.array(obj_hdulist['BPM'].data).flatten()
+    else:
+        
+        use4sky = numpy.ones((obj_cube.shape[0]), dtype=numpy.bool)
+        # by default, use entire frame for sky
+ 
+        if (mask_objects):
+            source_mask = find_source_mask(obj_data)
+            use4sky = use4sky & (~source_mask)
+            # trim down sky by regions not contaminated with (strong) sources
+
+        if (not select_region == None):
+            sky = numpy.zeros((obj_cube.shape[0]), dtype=numpy.bool)
+            for y12 in select_region:
+                print "@@@@@@@@@@",y12, numpy.sum(use4sky), use4sky.shape
+                sky[y12[0]:y12[1]] = True
+            use4sky = use4sky & sky
+            # also only select regions explicitely chosen as sky
+
+        print "selecting:", use4sky.shape, numpy.sum(use4sky)
+
+        obj_cube = obj_cube[use4sky]
 
         _x = numpy.array(obj_data)
         _x[source_mask] = numpy.NaN
@@ -150,7 +172,8 @@ def optimal_sky_subtraction(obj_hdulist,
             pyfits.ImageHDU(data=obj_data),
             pyfits.ImageHDU(data=_x)]).writeto("obj_mask.fits")
 
-        obj_bpm  = obj_hdulist['BPM'].data[~source_mask].flatten()
+        obj_bpm  = numpy.array(obj_hdulist['BPM'].data)[use4sky].flatten()
+        print obj_bpm.shape, obj_cube.shape
 
 
     obj_cube = obj_cube.reshape((-1, obj_cube.shape[2]))
@@ -167,6 +190,7 @@ def optimal_sky_subtraction(obj_hdulist,
     if (not type(sky_regions) == type(None) and
         type(sky_regions) == numpy.ndarray):
 
+        print sky_regions
         logger.info("Selecting sky-pixels from user-defined regions")
         is_sky = numpy.zeros((obj_cube.shape[0]), dtype=numpy.bool)
         for idx, sky_region in enumerate(sky_regions):
@@ -177,8 +201,7 @@ def optimal_sky_subtraction(obj_hdulist,
             is_sky[in_region] = True
 
         obj_cube = obj_cube[is_sky]
-
-
+        
     allskies = obj_cube #[::skiplength]
     numpy.savetxt("xxx1", allskies)
 
@@ -332,14 +355,19 @@ def optimal_sky_subtraction(obj_hdulist,
     numpy.savetxt("bp_out", k_opt_good)
 
     
-    spline_opt = scipy.interpolate.LSQUnivariateSpline(
-        x=allskies[:,0], 
-        y=allskies[:,1], 
-        t=k_opt_good[::10], #k_wl,
-        w=None, # no weights (for now)
-        bbox=[wl_min, wl_max], 
-        k=3, # use a cubic spline fit
+    try:
+        spline_opt = scipy.interpolate.LSQUnivariateSpline(
+            x=allskies[:,0], 
+            y=allskies[:,1], 
+            t=k_opt_good[::10], #k_wl,
+            w=None, # no weights (for now)
+            bbox=[wl_min, wl_max], 
+            k=3, # use a cubic spline fit
         )
+    except ValueError:
+        logger.error("Unable to compute LSQUnivariateSpline (data: %d, bp=%d/10)" % (
+            allskies.shape[0], k_opt_good.shape[0]))
+        return None, None
 
     spec_simple = numpy.append(k_wl.reshape((-1,1)),
                                              spline_opt(k_wl).reshape((-1,1)),
@@ -387,14 +415,31 @@ def optimal_sky_subtraction(obj_hdulist,
         # compute spline
         k_iter_good = satisfy_schoenberg_whitney(good_data[:,0], k_wl, k=3)
 
-        spline_iter = scipy.interpolate.LSQUnivariateSpline(
-            x=good_data[:,0], #allskies[:,0],#[good_point], 
-            y=good_data[:,1], #allskies[:,1],#[good_point], 
-            t=k_iter_good, #k_wl,
-            w=None, # no weights (for now)
-            bbox=[wl_min, wl_max], 
-            k=3, # use a cubic spline fit
+        try:
+            spline_iter = scipy.interpolate.LSQUnivariateSpline(
+                x=good_data[:,0], #allskies[:,0],#[good_point], 
+                y=good_data[:,1], #allskies[:,1],#[good_point], 
+                t=k_iter_good, #k_wl,
+                w=None, # no weights (for now)
+                bbox=[wl_min, wl_max], 
+                k=3, # use a cubic spline fit
             )
+        except ValueError:
+            # this is most likely 
+            # ValueError: Interior knots t must satisfy Schoenberg-Whitney conditions
+            if (iteration > 0):
+                break
+            else:
+                print "unable to compute LSQ spline, skipping 4/5 basepoints"
+                spline_iter = scipy.interpolate.LSQUnivariateSpline(
+                    x=good_data[:,0], #allskies[:,0],#[good_point], 
+                    y=good_data[:,1], #allskies[:,1],#[good_point], 
+                    t=k_iter_good[5:-5][::5], #k_wl,
+                    w=None, # no weights (for now)
+                    bbox=[wl_min, wl_max], 
+                    k=3, # use a cubic spline fit
+                )
+                
         numpy.savetxt("spline_opt.iter%d" % (iteration+1), 
                       numpy.append(k_wl.reshape((-1,1)),
                                    spline_iter(k_wl).reshape((-1,1)),
@@ -495,22 +540,58 @@ def optimal_sky_subtraction(obj_hdulist,
     #
     sky2d = None
 
+    # compute high-res sky-spectrum
+    wl_highres = numpy.linspace(allskies[0,0], allskies[-1,0], 100000)
+    sky_highres = spline_iter(wl_highres)
+    numpy.savetxt("sky_highres", numpy.append(wl_highres.reshape((-1,1)),
+                                              sky_highres.reshape((-1,1)), axis=1))
+
+    allskies_synth = spline_iter(allskies[:,0])
+    ascombined = numpy.zeros((allskies_synth.shape[0],4))
+    ascombined[:,0] = allskies[:,0]
+    ascombined[:,1] = allskies[:,1]
+    ascombined[:,2] = allskies_synth[:]
+    ascombined[:,3] = allskies[:,1] - allskies_synth[:]
+    numpy.savetxt("skysub_all", ascombined)
+
+
     if (not spline_iter == None):
-        sky2d = spline_iter(obj_wl.ravel()).reshape(obj_wl.shape)
+        padded = numpy.empty((obj_wl.shape[0], obj_wl.shape[1]+2))
+        padded[:, 1:-1] = obj_wl[:,:]
+        padded[:,0] = obj_wl[:,0]
+        padded[:,-1] = obj_wl[:,-1]
+        from_wl = 0.5*(padded[:, 0:-2] + padded[:, 1:-1])
+        to_wl = 0.5*(padded[:, 1:-1] + padded[:, 2:])
+        print "n\nXXXXX",from_wl.shape, to_wl.shape, obj_wl.shape, padded, "\nXXXXX\n"
 
-        if (not type(skyline_flat) == type(None)):
-            sky2d *= skyline_flat.reshape((-1,1))
+        # this would be a nice call, but xxx.integral does not support multiple values
+        # sky2d_x = spline_iter.integral(from_wl.ravel(), to_wl.ravel()).reshape(from_wl.shape)
+        #
+        # therefore we need to do the integration for each pixel by hand
+        t0 = time.time()
+        sky2d = numpy.array([spline_iter.integral(a,b) for a,b in zip(from_wl.ravel(),to_wl.ravel())]).reshape(obj_wl.shape)
+        t1 = time.time()
+        print "integration took %f seconds" % (t1-t0)
+        pyfits.PrimaryHDU(data=sky2d).writeto("IntegSky.fits", clobber=True)
 
-        skysub = obj_data - sky2d
-        ss_hdu = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
-                                 data=skysub)
-        ss_hdu.name = "SKYSUB.OPT"
-        obj_hdulist.append(ss_hdu)
+        # t0 = time.time()
+        # sky2d = spline_iter(obj_wl.ravel()).reshape(obj_wl.shape)
+        # t1 = time.time()
+        # print "interpolation took %f seconds" % (t1-t0)
 
-        ss_hdu2 = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
-                                 data=sky2d)
-        ss_hdu2.name = "SKYSUB.IMG"
-        obj_hdulist.append(ss_hdu2)
+        #if (not type(skyline_flat) == type(None)):
+        #    sky2d *= skyline_flat.reshape((-1,1))
+
+        # skysub = obj_data - sky2d
+        # ss_hdu = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
+        #                          data=skysub)
+        # ss_hdu.name = "SKYSUB.OPT"
+        # obj_hdulist.append(ss_hdu)
+
+        # ss_hdu2 = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
+        #                          data=sky2d)
+        # ss_hdu2.name = "SKYSUB.IMG"
+        # obj_hdulist.append(ss_hdu2)
 
 
         return sky2d, spline_iter
