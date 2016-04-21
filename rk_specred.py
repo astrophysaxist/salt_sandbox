@@ -17,7 +17,9 @@ and up to date.
 import os, sys, glob, shutil, time
 
 import numpy
-import pyfits
+#import pyfits
+import astropy.io.fits as pyfits
+
 from scipy.ndimage.filters import median_filter
 import bottleneck
 import scipy.interpolate
@@ -26,7 +28,7 @@ numpy.seterr(divide='ignore', invalid='ignore')
 # Disable nasty and useless RankWarning when spline fitting
 import warnings
 warnings.simplefilter('ignore', numpy.RankWarning)
-warnings.simplefilter('ignore', pyfits.PyfitsDeprecationWarning)
+#warnings.simplefilter('ignore', pyfits.PyfitsDeprecationWarning)
 warnings.simplefilter('ignore', FutureWarning)
 warnings.simplefilter('ignore', UserWarning)
 # sys.path.insert(1, "/work/pysalt/")
@@ -881,7 +883,7 @@ def specred(rawdir, prodir,
                             flatfield_frame = masterflat_filename,
                             badpixelimage=None, 
                             create_variance=True, 
-                            clean_cosmics=True,
+                            clean_cosmics=False, #True,
                             mosaic=True,
                             verbose=False,
         )
@@ -1086,16 +1088,50 @@ def specred(rawdir, prodir,
         else:
             skyline_flat = None
 
+        # sky_2d, spline = optimalskysub.optimal_sky_subtraction(
+        #     hdu, 
+        #     sky_regions=sky_regions,
+        #     N_points=2000,
+        #     iterate=False,
+        #     skiplength=5,
+        #     skyline_flat=skyline_flat, #intensity_profile.reshape((-1,1)),
+        # )
+
+            
+
         sky_2d, spline = optimalskysub.optimal_sky_subtraction(
             hdu, 
-            sky_regions=sky_regions,
+            sky_regions=None, #sky_regions,
             N_points=2000,
             iterate=False,
             skiplength=5,
             skyline_flat=skyline_flat, #intensity_profile.reshape((-1,1)),
+            #select_region=numpy.array([[900,950]])
+            select_region=numpy.array([[600,640],[660,700]])
         )
 
-        
+        bs = 100
+        maxbs = 10
+
+        sky2d_full = numpy.zeros(img_data.shape)
+        for nbs in range(maxbs):
+
+            sky_2d, spline = optimalskysub.optimal_sky_subtraction(
+                hdu, 
+                sky_regions=None, #sky_regions,
+                N_points=2000,
+                iterate=False,
+                skiplength=5,
+                skyline_flat=skyline_flat, #intensity_profile.reshape((-1,1)),
+                #select_region=numpy.array([[900,950]])
+                select_region=numpy.array([[nbs*bs,(nbs+1)*bs]])
+            )
+            if (sky_2d == None):
+                continue
+            sky2d_full[nbs*bs:(nbs+1)*bs, :] = sky_2d[nbs*bs:(nbs+1)*bs, :]
+
+        sky_2d = sky2d_full
+
         pyfits.PrimaryHDU(data=hdu['SCI.RAW'].data/skyline_flat).writeto("img_sky2d_input.fits", clobber=True)
 
         pyfits.PrimaryHDU(data=sky_2d).writeto("img_sky2d.fits", clobber=True)

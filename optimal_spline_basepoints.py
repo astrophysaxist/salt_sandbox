@@ -99,7 +99,8 @@ def optimal_sky_subtraction(obj_hdulist,
                             skiplength=5,
                             mask_objects=True,
                             add_edges=True,
-                            skyline_flat=None):
+                            skyline_flat=None,
+                            select_region=None):
 
     logger = logging.getLogger("OptSplineKs")
 
@@ -137,12 +138,31 @@ def optimal_sky_subtraction(obj_hdulist,
     pysalt.clobberfile("data_postflat.fits")
     pyfits.PrimaryHDU(data=obj_cube[:,:,1]).writeto("data_postflat.fits", clobber=True)
 
+    
     # mask_objects = False
-    if (not mask_objects):
+    if (not mask_objects and select_region == None):
         obj_bpm  = numpy.array(obj_hdulist['BPM'].data).flatten()
     else:
-        source_mask = find_source_mask(obj_data)
-        obj_cube = obj_cube[~source_mask]
+        
+        use4sky = numpy.ones((obj_cube.shape[0]), dtype=numpy.bool)
+        # by default, use entire frame for sky
+ 
+        if (mask_objects):
+            source_mask = find_source_mask(obj_data)
+            use4sky = use4sky & (~source_mask)
+            # trim down sky by regions not contaminated with (strong) sources
+
+        if (not select_region == None):
+            sky = numpy.zeros((obj_cube.shape[0]), dtype=numpy.bool)
+            for y12 in select_region:
+                print "@@@@@@@@@@",y12, numpy.sum(use4sky), use4sky.shape
+                sky[y12[0]:y12[1]] = True
+            use4sky = use4sky & sky
+            # also only select regions explicitely chosen as sky
+
+        print "selecting:", use4sky.shape, numpy.sum(use4sky)
+
+        obj_cube = obj_cube[use4sky]
 
         _x = numpy.array(obj_data)
         _x[source_mask] = numpy.NaN
@@ -152,7 +172,8 @@ def optimal_sky_subtraction(obj_hdulist,
             pyfits.ImageHDU(data=obj_data),
             pyfits.ImageHDU(data=_x)]).writeto("obj_mask.fits")
 
-        obj_bpm  = numpy.array(obj_hdulist['BPM'].data)[~source_mask].flatten()
+        obj_bpm  = numpy.array(obj_hdulist['BPM'].data)[use4sky].flatten()
+        print obj_bpm.shape, obj_cube.shape
 
 
     obj_cube = obj_cube.reshape((-1, obj_cube.shape[2]))
@@ -169,6 +190,7 @@ def optimal_sky_subtraction(obj_hdulist,
     if (not type(sky_regions) == type(None) and
         type(sky_regions) == numpy.ndarray):
 
+        print sky_regions
         logger.info("Selecting sky-pixels from user-defined regions")
         is_sky = numpy.zeros((obj_cube.shape[0]), dtype=numpy.bool)
         for idx, sky_region in enumerate(sky_regions):
@@ -179,8 +201,7 @@ def optimal_sky_subtraction(obj_hdulist,
             is_sky[in_region] = True
 
         obj_cube = obj_cube[is_sky]
-
-
+        
     allskies = obj_cube #[::skiplength]
     numpy.savetxt("xxx1", allskies)
 
@@ -267,7 +288,7 @@ def optimal_sky_subtraction(obj_hdulist,
     if (add_edges):
         logger.info("Adding sky-samples for line edges")
 
-        # pysalt.clobberfile("edges.cheat")
+        pysalt.clobberfile("edges.cheat")
         if (not os.path.isfile("edges.cheat")):
             edges = find_edges_of_skylines.find_edges_of_skylines(allskies, fn="XXX")
             numpy.savetxt("edges.cheat", edges)
@@ -334,14 +355,19 @@ def optimal_sky_subtraction(obj_hdulist,
     numpy.savetxt("bp_out", k_opt_good)
 
     
-    spline_opt = scipy.interpolate.LSQUnivariateSpline(
-        x=allskies[:,0], 
-        y=allskies[:,1], 
-        t=k_opt_good[::10], #k_wl,
-        w=None, # no weights (for now)
-        bbox=[wl_min, wl_max], 
-        k=3, # use a cubic spline fit
+    try:
+        spline_opt = scipy.interpolate.LSQUnivariateSpline(
+            x=allskies[:,0], 
+            y=allskies[:,1], 
+            t=k_opt_good[::10], #k_wl,
+            w=None, # no weights (for now)
+            bbox=[wl_min, wl_max], 
+            k=3, # use a cubic spline fit
         )
+    except ValueError:
+        logger.error("Unable to compute LSQUnivariateSpline (data: %d, bp=%d/10)" % (
+            allskies.shape[0], k_opt_good.shape[0]))
+        return None, None
 
     spec_simple = numpy.append(k_wl.reshape((-1,1)),
                                              spline_opt(k_wl).reshape((-1,1)),
