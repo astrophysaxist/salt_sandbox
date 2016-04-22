@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 
 
-import os, sys, pyfits, numpy, scipy.ndimage, scipy.signal
+import os, sys, numpy, scipy.ndimage, scipy.signal
 import logging
+from astropy.io import fits
 
 import pysalt.mp_logging
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import os, sys, pyfits
+import os, sys
 import numpy
 from scipy.ndimage.filters import median_filter
 import bottleneck
@@ -19,6 +19,7 @@ from PySpectrograph.Models import RSSModel
 
 import pysalt
 
+from astropy.io import fits
 
 import scipy.spatial
 import pysalt.mp_logging
@@ -128,9 +129,11 @@ def trace_arc(data,
     arc_center[start_y,0] = start_x
 
     n_pixels_for_corner = 5
-    
+    corner_count = 0
+    corner_min = 3
+
     for lines_since_start, next_row_idx in enumerate(row_numbers):
-        logger.debug("Moving from row %4d to %4d" % (current_row_idx, next_row_idx))
+        logger.debug("\n\nMoving from row %4d to %4d (%d)" % (current_row_idx, next_row_idx, corner_count))
 
         # extract a bunch of pixels in the next row around the position of the 
         # current peak
@@ -145,6 +148,7 @@ def trace_arc(data,
 
         next_row = data[current_col_idx-max_window_x:current_col_idx+max_window_x+1,
                         next_row_idx]
+        #print "ROW:",next_row 
 
         # If next row contains pixels marked as NaN's stop work to avoid going 
         # off into no-mans-land
@@ -155,6 +159,7 @@ def trace_arc(data,
 
         # Now compute gradients
         next_row_gradients = next_row / y_stepsize
+        # print "GRADIENT:",next_row_gradients
 
         # pick the pixel with the largest positive gradient. 
         # this means we either move to even brighter pixels (if grad. > 0) or 
@@ -202,6 +207,11 @@ def trace_arc(data,
                         current_row_idx, angle_past, angle_now))
                 avg_past = dx_past / n_pixels_for_corner
                 # for i in range(2*n_pixels_for_corners):
+                corner_count += 1
+            else:
+                corner_count = 0
+
+            if (corner_count > corner_min):
                 break
 
         # corner_detected = False
@@ -328,16 +338,16 @@ def subpixel_centroid_trace(data, tracedata, width=5, dumpfile=None, return_all=
     #print weighted_center_x.shape
 
     if (not dumpfile == None and createdebugfiles):
-        if (type(dumpfile) == pyfits.hdu.image.ImageHDU):
+        if (type(dumpfile) == fits.hdu.image.ImageHDU):
             dumpfile.data = data_sel
             dumpfile.header['OBJECT'] = "avg. line pos: %.2f px" % (numpy.median(line_positions))
         else:
             # prepare a fits file with the rough-rectified line, with column numbers
-            hdulist = pyfits.HDUList([
-                pyfits.PrimaryHDU(),
-                pyfits.ImageHDU(data=data_sel,name='BGSUB'),
-                pyfits.ImageHDU(data=line_positions,name='POS'),
-                pyfits.ImageHDU(data=raw_data, name='RAW'),
+            hdulist = fits.HDUList([
+                fits.PrimaryHDU(),
+                fits.ImageHDU(data=data_sel,name='BGSUB'),
+                fits.ImageHDU(data=line_positions,name='POS'),
+                fits.ImageHDU(data=raw_data, name='RAW'),
             ])
             hdulist.writeto(dumpfile, clobber=True)
 
@@ -362,7 +372,7 @@ def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None,
     logger.debug("Beginning line-trace at position X=%d, Y=%d" % (arcpos_x, wls_data['line']))
             
     #data_around_line = fitsdata[arcpos_x-100:arcpos_x+100,:]
-    #pyfits.PrimaryHDU(data=data_around_line.T).writeto("arcregion.fits", clobber=True)
+    #fits.PrimaryHDU(data=data_around_line.T).writeto("arcregion.fits", clobber=True)
 
 #     if (not ds9_region_file == None):
 #         ds9_region = open(ds9_region_file, "a")
@@ -422,13 +432,13 @@ def trace_single_line(fitsdata, wls_data, line_idx, ds9_region_file=None,
         # line_cutout = fitsdata[traced_y_pos, x1:x2]
         # print line_cutout.shape
 
-        imghdu = pyfits.ImageHDU()
+        imghdu = fits.ImageHDU()
         fine_pos = subpixel_centroid_trace(data=fitsdata.T, tracedata=all_row_data, width=10, 
                                            dumpfile=imghdu,
                                            )#"linetrace_%d.fits" % (line_idx))
         if (not linetrace_hdulist == None):
             linetrace_hdulist.append(imghdu)
-        #pyfits.PrimaryHDU(data=rectified).writeto("linetrace_%d.fits" % (line_idx), clobber=True)
+        #fits.PrimaryHDU(data=rectified).writeto("linetrace_%d.fits" % (line_idx), clobber=True)
         
     else:
         fine_pos = all_row_data[:,1]
@@ -697,8 +707,8 @@ def compute_2d_wavelength_solution(arc_filename,
         _, bn = os.path.split(arc_filename)
         logger = logging.getLogger("Comp2D-WLS(%s)" % (bn))
         logger.info("Tracing arcs in file %s" % (arc_filename))
-        hdulist = pyfits.open(arc_filename)
-    elif (type(arc_filename) == pyfits.hdu.hdulist.HDUList):
+        hdulist = fits.open(arc_filename)
+    elif (type(arc_filename) == fits.hdu.hdulist.HDUList):
         # This is already a valid HDUlist, so we don't need to open anything
         hdulist = arc_filename
         logger = logging.getLogger("Comp2D-WLS(HDU)")
@@ -753,7 +763,7 @@ def compute_2d_wavelength_solution(arc_filename,
     #fitsdata = fitsdata[:, 60:1985]
 
     if (debug): 
-        pyfits.PrimaryHDU(data=fitsdata.T).writeto("image_slitflattened.fits", clobber=True)
+        fits.PrimaryHDU(data=fitsdata.T).writeto("image_slitflattened.fits", clobber=True)
 
     binx, biny = pysalt.get_binning(hdulist)
 
@@ -767,7 +777,7 @@ def compute_2d_wavelength_solution(arc_filename,
     fitsdata[fitsdata <= 0] = numpy.NaN
 
     if (debug):
-        pyfits.PrimaryHDU(data=fitsdata.T).writeto("image_smooth.fits", clobber=True)
+        fits.PrimaryHDU(data=fitsdata.T).writeto("image_smooth.fits", clobber=True)
 
 
     #
@@ -817,7 +827,7 @@ def compute_2d_wavelength_solution(arc_filename,
     #print trace_line_indices
     #print "XXX"
 
-    linetrace_hdulist = [pyfits.PrimaryHDU()]
+    linetrace_hdulist = [fits.PrimaryHDU()]
 
     for i in trace_line_indices: #range(n_lines_to_trace):
         linetrace = trace_single_line(fitsdata_gf, wls_data, i,
@@ -835,7 +845,7 @@ def compute_2d_wavelength_solution(arc_filename,
         #traces.append(linetrace)
 
     linetrace_fitsfile = "linetraces.fits"
-    linetrace_hdulist = pyfits.HDUList(linetrace_hdulist)
+    linetrace_hdulist = fits.HDUList(linetrace_hdulist)
     #clobberfile(linetrace_fitsfile)
     linetrace_hdulist.writeto(linetrace_fitsfile, clobber=True)
 
@@ -886,13 +896,13 @@ def compute_2d_wavelength_solution(arc_filename,
     wl_data = polyval2d(arc_x.astype(numpy.float32), arc_y.astype(numpy.float32), m)
 
     if (debug):
-        pyfits.PrimaryHDU(data=wl_data.T).writeto(
+        fits.PrimaryHDU(data=wl_data.T).writeto(
             "image_wavelengths.fits", clobber=True)    
         
     if (not output_wavelength_image):
-        wli_hdulist = pyfits.HDUList([pyfits.PrimaryHDU(),
-                                  pyfits.ImageHDU(data=wl_data.T),
-                                  pyfits.ImageHDU(data=fitsdata.T)])
+        wli_hdulist = fits.HDUList([fits.PrimaryHDU(),
+                                  fits.ImageHDU(data=wl_data.T),
+                                  fits.ImageHDU(data=fitsdata.T)])
         wli_hdulist.writeto(output_wavelength_image, clobber=True)
 
     if (debug and False):

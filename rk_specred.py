@@ -18,7 +18,8 @@ import os, sys, glob, shutil, time
 
 import numpy
 #import pyfits
-import astropy.io.fits as pyfits
+#import astropy.io.fits as pyfits
+from astropy.io import fits
 
 from scipy.ndimage.filters import median_filter
 import bottleneck
@@ -29,6 +30,8 @@ numpy.seterr(divide='ignore', invalid='ignore')
 import warnings
 warnings.simplefilter('ignore', numpy.RankWarning)
 #warnings.simplefilter('ignore', pyfits.PyfitsDeprecationWarning)
+from astropy.utils.exceptions import *
+warnings.simplefilter('ignore', AstropyDeprecationWarning)
 warnings.simplefilter('ignore', FutureWarning)
 warnings.simplefilter('ignore', UserWarning)
 # sys.path.insert(1, "/work/pysalt/")
@@ -66,7 +69,7 @@ from pysalt.saltspec.speccal import speccal
 
 from PySpectrograph.Spectra import findobj
 
-import pyfits
+#import pyfits
 import pysalt.mp_logging
 import logging
 import numpy
@@ -115,7 +118,7 @@ def find_appropriate_arc(hdulist, arcfilelist, arcinfos={}):
             hdr = arcinfos[arcfile]
         else:
             # this is a new file we haven't scanned before
-            arc_hdulist = pyfits.open(arcfile)
+            arc_hdulist = fits.open(arcfile)
             hdr = arc_hdulist[0].header
             arcinfos[arcfile] = hdr
             arc_hdulist.close()
@@ -274,13 +277,13 @@ def tiledata(hdulist, rssgeom):
             #logger.info("output size: %d x %d" % (amp_width[i], height))
             data[:, startx:endx] = hdulist[ext].data[:,:amp_width[i]]
 
-        imghdu = pyfits.ImageHDU(data=data)
+        imghdu = fits.ImageHDU(data=data)
         imghdu.name = name
         out_hdus.append(imghdu)
     
     logger.info("Finished tiling for all %d data products" % (len(ext_order)))
 
-    return pyfits.HDUList(out_hdus)
+    return fits.HDUList(out_hdus)
 
 
 
@@ -295,13 +298,15 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
     logger = logging.getLogger("PrepData(%s)" % (fb))
     logger.info("Working on file %s" % (infile))
 
-    hdulist = pyfits.open(infile)
-    
+    #hdulist = pyfits.open(infile)
+    hdulist = fits.open(infile)
+    #print hdulist, type(hdulist)
+
     pysalt_log = None #'pysalt.log'
 
     badpixel_hdu = None
     if (not badpixelimage == None):
-        badpixel_hdu = pyfits.open(badpixelimage)
+        badpixel_hdu = fits.open(badpixelimage)
     
     #
     # Do some prepping
@@ -323,7 +328,7 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
     #     if (not ext.data == None): print ext.data.shape
     bias_hdu = None
     if (not masterbias == None and os.path.isfile(masterbias)):
-        bias_hdu = pyfits.open(masterbias)
+        bias_hdu = fits.open(masterbias)
     hdulist = pysalt.saltred.saltbias.bias(
         hdulist, 
         subover=True, trim=True, subbias=False, 
@@ -426,7 +431,7 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
     logger.info("FLAT: %s" % (str(flatfield_frame)))
     if (not flatfield_frame == None and os.path.isfile(flatfield_frame)):
         logger.debug("Applying flatfield")
-        flathdu = pyfits.open(flatfield_frame)
+        flathdu = fits.open(flatfield_frame)
         pysalt.saltred.saltflat.flat(
             struct=hdulist, #input
             fstruct=flathdu, # flatfield
@@ -548,7 +553,7 @@ def specred(rawdir, prodir,
     }
 
     for idx, filename in enumerate(infile_list):
-        hdulist = pyfits.open(filename)
+        hdulist = fits.open(filename)
         if (not hdulist[0].header['INSTRUME'] == "RSS"):
             logger.info("Frame %s is not a valid RSS frame (instrument: %s)" % (
                 filename, hdulist[0].header['INSTRUME']))
@@ -578,7 +583,7 @@ def specred(rawdir, prodir,
     flatfield_list = {}
 
     for idx, filename in enumerate(obslog['FLAT']):
-        hdulist = pyfits.open(filename)
+        hdulist = fits.open(filename)
         if (hdulist[0].header['OBSTYPE'].find("FLAT") >= 0 and
             hdulist[0].header['INSTRUME'] == "RSS"):
             #
@@ -702,7 +707,7 @@ def specred(rawdir, prodir,
     if (not skip_wavelength_cal_search):
         for idx, filename in enumerate(obslog['ARC']):
             _, fb = os.path.split(filename)
-            hdulist = pyfits.open(filename)
+            hdulist = fits.open(filename)
 
             # Use Julian Date for simple time indexing
             arc_obstimes[idx] = hdulist[0].header['JD']
@@ -765,7 +770,7 @@ def specred(rawdir, prodir,
                 arc_region_file=arc_region_file,
                 trace_every=0.05,
                 )
-            wl_hdu = pyfits.ImageHDU(data=wls_2darc)
+            wl_hdu = fits.ImageHDU(data=wls_2darc)
             wl_hdu.name = "WAVELENGTH"
             hdu_mosaiced.append(wl_hdu)
             
@@ -779,7 +784,7 @@ def specred(rawdir, prodir,
                 sky_regions=arc_regions,
                 oversample_factor=1.0,
                 )
-            simul_arc_hdu = pyfits.ImageHDU(data=arc2d)
+            simul_arc_hdu = fits.ImageHDU(data=arc2d)
             simul_arc_hdu.name = "SIMULATION"
             hdu_mosaiced.append(simul_arc_hdu)
             
@@ -826,7 +831,7 @@ def specred(rawdir, prodir,
     for idx, filename in enumerate(obslog['OBJECT']):
         _, fb = os.path.split(filename)
         _fb, _ = os.path.splitext(fb)
-        hdulist = pyfits.open(filename)
+        hdulist = fits.open(filename)
         logger = logging.getLogger("OBJ(%s)" % _fb)
 
         binx, biny = pysalt.get_binning(hdulist)
@@ -914,7 +919,7 @@ def specred(rawdir, prodir,
         # Make backup of the image BEFORE sky subtraction
         # make sure to copy the actual data, not just create a duplicate reference
         for source_ext in ['SCI', 'SCI.NOCRJ']:
-            presub_hdu = pyfits.ImageHDU(data=numpy.array(hdu['SCI'].data),
+            presub_hdu = fits.ImageHDU(data=numpy.array(hdu['SCI'].data),
                                          header=hdu['SCI'].header)
             presub_hdu.name = source_ext+'.RAW'
             hdu.append(presub_hdu)
@@ -959,7 +964,7 @@ def specred(rawdir, prodir,
         # wl_hdu.name = "WAVELENGTH"
         # hdu.append(wl_hdu)
 
-        arc_hdu = pyfits.open(good_arc)
+        arc_hdu = fits.open(good_arc)
         wls_2d = arc_hdu['WAVELENGTH'].data
 
         n_params = arc_hdu[0].header['WLSFIT_N']
@@ -969,9 +974,9 @@ def specred(rawdir, prodir,
             wls_fit[i] = arc_hdu[0].header['WLSFIT_%d' % (i)]
             hdu[0].header['WLSFIT_%d' % (i)] = arc_hdu[0].header['WLSFIT_%d' % (i)]
             
-        hdu.append(pyfits.ImageHDU(data=wls_2d, name='WAVELENGTH'))
+        hdu.append(fits.ImageHDU(data=wls_2d, name='WAVELENGTH'))
 
-        pyfits.PrimaryHDU(data=img_data).writeto("img0.fits", clobber=True)
+        fits.PrimaryHDU(data=img_data).writeto("img0.fits", clobber=True)
 
         apply_skyline_intensity_flat = True
         if (apply_skyline_intensity_flat):
@@ -990,14 +995,14 @@ def specred(rawdir, prodir,
                 )
             # Flatten the science frame using the line profile
             hdu.append(
-                pyfits.ImageHDU(
+                fits.ImageHDU(
                     data=numpy.array(hdu['SCI'].data), 
                     header=hdu['SCI'].header, 
                     name="SCI.PREFLAT"
                 )
             )
             hdu.append(
-                pyfits.ImageHDU(
+                fits.ImageHDU(
                     data=numpy.array(hdu['SCI'].data/intensity_profile.reshape((-1,1))), 
                     header=hdu['SCI'].header, 
                     name="SCI.POSTFLAT"
@@ -1019,12 +1024,12 @@ def specred(rawdir, prodir,
 
 
             y = img_data / intensity_profile.reshape((-1,1))
-            pyfits.PrimaryHDU(data=(y/img_data)).writeto("img1.fits", clobber=True)
+            fits.PrimaryHDU(data=(y/img_data)).writeto("img1.fits", clobber=True)
 
             #img_data /= intensity_profile.reshape((-1,1))
 
         print "Adding xxx extension"
-        hdu.append(pyfits.ImageHDU(header=hdu['SCI'].header,
+        hdu.append(fits.ImageHDU(header=hdu['SCI'].header,
                                    data=img_data,
                                    name="XXX"))
 
@@ -1132,9 +1137,9 @@ def specred(rawdir, prodir,
 
         sky_2d = sky2d_full
 
-        pyfits.PrimaryHDU(data=hdu['SCI.RAW'].data/skyline_flat).writeto("img_sky2d_input.fits", clobber=True)
+        fits.PrimaryHDU(data=hdu['SCI.RAW'].data/skyline_flat).writeto("img_sky2d_input.fits", clobber=True)
 
-        pyfits.PrimaryHDU(data=sky_2d).writeto("img_sky2d.fits", clobber=True)
+        fits.PrimaryHDU(data=sky_2d).writeto("img_sky2d.fits", clobber=True)
 
         #
         # Add here:
@@ -1158,18 +1163,18 @@ def specred(rawdir, prodir,
         #
 
         skysub_img = (img_data) - (sky_2d * opt_sky_scaling)
-        skysub_hdu = pyfits.ImageHDU(header=hdu['SCI'].header,
+        skysub_hdu = fits.ImageHDU(header=hdu['SCI'].header,
                                      data=skysub_img,
                                      name="SKYSUB.X")
         hdu.append(skysub_hdu)
 
         # skysub = obj_data - sky2d
-        # ss_hdu = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
+        # ss_hdu = fits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
         #                          data=skysub)
         # ss_hdu.name = "SKYSUB.OPT"
         # obj_hdulist.append(ss_hdu)
 
-        # ss_hdu2 = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
+        # ss_hdu2 = fits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
         #                          data=sky2d)
         # ss_hdu2.name = "SKYSUB.IMG"
         # obj_hdulist.append(ss_hdu2)
@@ -1576,7 +1581,7 @@ def createspectra(img, obsdate, minsize=5, thresh=3, skysection=[800,1000], smoo
     """Create a list of spectra for each of the objects in the images"""
     #okay we need to identify the objects for extraction and identify the regions for sky extraction
     #first find the objects in the image
-    hdu=pyfits.open(img)
+    hdu=fits.open(img)
     target=hdu[0].header['OBJECT']
     propcode=hdu[0].header['PROPID']
     airmass=hdu[0].header['AIRMASS']
