@@ -1164,7 +1164,7 @@ def specred(rawdir, prodir,
 
         skysub_img = (img_data) - (sky_2d * opt_sky_scaling)
         skysub_hdu = fits.ImageHDU(header=hdu['SCI'].header,
-                                     data=skysub_img,
+                                     data=numpy.array(skysub_img),
                                      name="SKYSUB.X")
         hdu.append(skysub_hdu)
 
@@ -1179,6 +1179,35 @@ def specred(rawdir, prodir,
         # ss_hdu2.name = "SKYSUB.IMG"
         # obj_hdulist.append(ss_hdu2)
 
+        #
+        # Run cosmic ray rejection on the sky-line subtracted frame
+        # Loop over all SCI extensions
+        #
+        sigclip = 5.0
+        sigfrac = 0.6
+        objlim = 5.0
+        saturation_limit=65000
+        try:
+            gain = 1.5 if (not 'GAIN' in hdu['SCI'].header) else hdu['SCI'].header['GAIN']
+            readnoise = 3 if (not 'RDNOISE' in hdu['SCI'].header) else hdu['SCI'].header['RDNOISE']
+        except:
+            gain, readnoise = 1.3, 5
+
+        crj = podi_cython.lacosmics(
+            numpy.array(skysub_img), #.astype(numpy.float64), 
+            gain=gain, 
+            readnoise=readnoise, 
+            niter=3,
+            sigclip=sigclip, sigfrac=sigfrac, objlim=objlim,
+            saturation_limit=saturation_limit,
+            verbose=False
+        )
+        cell_cleaned, cell_mask, cell_saturated = crj
+        
+        final_hdu = fits.ImageHDU(header=hdu['SCI'].header,
+                                  data=cell_cleaned,
+                                  name="SKYSUB.OPT")
+        hdu.append(final_hdu)
 
         #
         # And finally write reduced frame back to disk
