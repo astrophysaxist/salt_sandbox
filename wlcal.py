@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import os, sys, pyfits
+import os, sys
 import numpy
 from scipy.ndimage.filters import median_filter
 import bottleneck
@@ -9,6 +9,8 @@ numpy.seterr(divide='ignore', invalid='ignore')
 import itertools
 import math
 import matplotlib
+
+from astropy.io import fits
 
 # Disable nasty and useless RankWarning when spline fitting
 import warnings
@@ -625,8 +627,8 @@ def find_wavelength_solution(filename, line):
     logger = logging.getLogger("FindWLS")
 
     if (type(filename) == str and os.path.isfile(filename)):
-        hdulist = pyfits.open(filename)
-    elif (type(filename) == pyfits.hdu.hdulist.HDUList):
+        hdulist = fits.open(filename)
+    elif (type(filename) == fits.hdu.hdulist.HDUList):
         hdulist = filename
     else:
         logger.error("Invalid input, needs to be either HDUList or string, but found %s" % (str(type(filename))))
@@ -1236,7 +1238,7 @@ if __name__ == "__main__":
     except:
         pass
 
-    hdulist = pyfits.open(filename)
+    hdulist = fits.open(filename)
 
     wls_data = find_wavelength_solution(hdulist, line)
 

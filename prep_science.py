@@ -2,10 +2,12 @@
 
 import warnings
 
-import os, sys, scipy, scipy.stats, scipy.ndimage, pyfits, numpy
+import os, sys, scipy, scipy.stats, scipy.ndimage, numpy
 import wlcal
 import skyline_intensity
 import traceline
+
+from astropy.io import fits
 
 from optimal_spline_basepoints import satisfy_schoenberg_whitney
 import bottleneck
@@ -192,13 +194,13 @@ def filter_isolate_skylines(data, write_debug_data=False):
 
     if (write_debug_data):
         logger.debug("Writing debug information to FITS")
-        pyfits.PrimaryHDU(data=data).writeto("data.fits", clobber=True)
-        pyfits.PrimaryHDU(data=data_filtered).writeto("filtered.fits", clobber=True)
-        pyfits.PrimaryHDU(data=skylines).writeto("skylines.fits", clobber=True)
+        fits.PrimaryHDU(data=data).writeto("data.fits", clobber=True)
+        fits.PrimaryHDU(data=data_filtered).writeto("filtered.fits", clobber=True)
+        fits.PrimaryHDU(data=skylines).writeto("skylines.fits", clobber=True)
 
-        fake_hdu = pyfits.HDUList([
-            pyfits.PrimaryHDU(),
-            pyfits.ImageHDU(data=skylines, name="SCI"),
+        fake_hdu = fits.HDUList([
+            fits.PrimaryHDU(),
+            fits.ImageHDU(data=skylines, name="SCI"),
         ])
 
     return skylines, data_filtered
@@ -334,9 +336,9 @@ def extract_skyline_intensity_profile(
     #
     numpy.savetxt("intensity_profile", intensity_profile)
     flat_skylines = skylines / intensity_profile.reshape((-1,1))
-    pyfits.PrimaryHDU(data=flat_skylines).writeto("flat_skylines.fits", clobber=True)
+    fits.PrimaryHDU(data=flat_skylines).writeto("flat_skylines.fits", clobber=True)
 
-    pyfits.PrimaryHDU(
+    fits.PrimaryHDU(
         data=data/intensity_profile.reshape((-1,1))).writeto(
             "flat_data.fits", clobber=True)
 
@@ -366,7 +368,7 @@ if __name__ == "__main__":
     logger_setup = pysalt.mp_logging.setup_logging()
 
     filename = sys.argv[1]
-    hdulist = pyfits.open(filename)
+    hdulist = fits.open(filename)
 
     n_params = hdulist[0].header['WLSFIT_N']
     wls_fit = numpy.zeros(n_params)
@@ -377,7 +379,7 @@ if __name__ == "__main__":
 
         data = hdulist['SCI.RAW'].data
 
-        pyfits.PrimaryHDU(data=hdulist['SCI.RAW'].data).writeto(
+        fits.PrimaryHDU(data=hdulist['SCI.RAW'].data).writeto(
             "skyflattened_pre%d.fits" % (iteration+1), clobber=True)
 
         skylines, lines, profile = extract_skyline_intensity_profile(
@@ -421,7 +423,7 @@ if __name__ == "__main__":
 
          # for i in range(2):
          #    fn = "skyline_%02d_iter%d.fits" % (i+1, iteration+1)
-         #    h = pyfits.open(fn)
+         #    h = fits.open(fn)
          #    h[1].data /= profile.reshape((-1,1))
          #    h.writeto(fn[:-5]+".flat.fits", clobber=True)
 
@@ -429,7 +431,7 @@ if __name__ == "__main__":
 
         numpy.savetxt("skyflat_%d.txt" % (iteration+1), profile.reshape((-1,1)))
 
-        pyfits.PrimaryHDU(data=hdulist['SCI.RAW'].data).writeto(
+        fits.PrimaryHDU(data=hdulist['SCI.RAW'].data).writeto(
             "skyflattened_%d.fits" % (iteration+1), clobber=True)
 
         break

@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 
-import os, sys, pyfits, numpy, time
+import os, sys, numpy, time
 import scipy, scipy.interpolate, scipy.spatial, scipy.ndimage
 
+from astropy.io import fits
 
 import pysalt.mp_logging
 import logging
@@ -126,7 +127,7 @@ def optimal_sky_subtraction(obj_hdulist,
     obj_cube[:,:,3] = obj_spatial[:,:]
 
     pysalt.clobberfile("data_preflat.fits")
-    pyfits.PrimaryHDU(data=obj_cube[:,:,1]).writeto("data_preflat.fits", clobber=True)
+    fits.PrimaryHDU(data=obj_cube[:,:,1]).writeto("data_preflat.fits", clobber=True)
 
     if (not type(skyline_flat) == type(None)):
         # We also received a skyline flatfield for field flattening
@@ -136,7 +137,7 @@ def optimal_sky_subtraction(obj_hdulist,
         pass
 
     pysalt.clobberfile("data_postflat.fits")
-    pyfits.PrimaryHDU(data=obj_cube[:,:,1]).writeto("data_postflat.fits", clobber=True)
+    fits.PrimaryHDU(data=obj_cube[:,:,1]).writeto("data_postflat.fits", clobber=True)
 
     
     # mask_objects = False
@@ -167,10 +168,10 @@ def optimal_sky_subtraction(obj_hdulist,
         _x = numpy.array(obj_data)
         _x[source_mask] = numpy.NaN
         pysalt.clobberfile("obj_mask.fits")
-        pyfits.HDUList([
-            pyfits.PrimaryHDU(),
-            pyfits.ImageHDU(data=obj_data),
-            pyfits.ImageHDU(data=_x)]).writeto("obj_mask.fits")
+        fits.HDUList([
+            fits.PrimaryHDU(),
+            fits.ImageHDU(data=obj_data),
+            fits.ImageHDU(data=_x)]).writeto("obj_mask.fits")
 
         obj_bpm  = numpy.array(obj_hdulist['BPM'].data)[use4sky].flatten()
         print obj_bpm.shape, obj_cube.shape
@@ -205,7 +206,7 @@ def optimal_sky_subtraction(obj_hdulist,
     allskies = obj_cube #[::skiplength]
     numpy.savetxt("xxx1", allskies)
 
-    # _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
+    # _x = fits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
     #                      header=obj_hdulist['SCI.RAW'].header)
     # _x.name = "STEP1"
     # obj_hdulist.append(_x)
@@ -350,7 +351,7 @@ def optimal_sky_subtraction(obj_hdulist,
     k_opt_good = satisfy_schoenberg_whitney(allskies[:,0], k_wl, k=3)
 
     numpy.savetxt("allskies", allskies)
-    pyfits.PrimaryHDU(data=allskies).writeto("allskies.fits", clobber=True)
+    fits.PrimaryHDU(data=allskies).writeto("allskies.fits", clobber=True)
     numpy.savetxt("bp_in", k_wl)
     numpy.savetxt("bp_out", k_opt_good)
 
@@ -394,7 +395,7 @@ def optimal_sky_subtraction(obj_hdulist,
             return spec
 
 
-    # _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
+    # _x = fits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
     #                      header=obj_hdulist['SCI.RAW'].header)
     # _x.name = "STEP2"
     # obj_hdulist.append(_x)
@@ -515,7 +516,7 @@ def optimal_sky_subtraction(obj_hdulist,
         logger.info("Done with iteration %d (%d pixels left)" % (iteration+1, good_data.shape[0]))
 
 
-    # _x = pyfits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
+    # _x = fits.ImageHDU(data=obj_hdulist['SCI.RAW'].data, 
     #                      header=obj_hdulist['SCI.RAW'].header)
     # _x.name = "STEP3"
     # obj_hdulist.append(_x)
@@ -572,7 +573,7 @@ def optimal_sky_subtraction(obj_hdulist,
         sky2d = numpy.array([spline_iter.integral(a,b) for a,b in zip(from_wl.ravel(),to_wl.ravel())]).reshape(obj_wl.shape)
         t1 = time.time()
         print "integration took %f seconds" % (t1-t0)
-        pyfits.PrimaryHDU(data=sky2d).writeto("IntegSky.fits", clobber=True)
+        fits.PrimaryHDU(data=sky2d).writeto("IntegSky.fits", clobber=True)
 
         # t0 = time.time()
         # sky2d = spline_iter(obj_wl.ravel()).reshape(obj_wl.shape)
@@ -583,12 +584,12 @@ def optimal_sky_subtraction(obj_hdulist,
         #    sky2d *= skyline_flat.reshape((-1,1))
 
         # skysub = obj_data - sky2d
-        # ss_hdu = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
+        # ss_hdu = fits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
         #                          data=skysub)
         # ss_hdu.name = "SKYSUB.OPT"
         # obj_hdulist.append(ss_hdu)
 
-        # ss_hdu2 = pyfits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
+        # ss_hdu2 = fits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
         #                          data=sky2d)
         # ss_hdu2.name = "SKYSUB.IMG"
         # obj_hdulist.append(ss_hdu2)
@@ -634,7 +635,7 @@ if __name__ == "__main__":
 
 
     obj_fitsfile = sys.argv[1]
-    obj_hdulist = pyfits.open(obj_fitsfile)
+    obj_hdulist = fits.open(obj_fitsfile)
 
     sky_regions = None
     if (len(sys.argv) > 2):

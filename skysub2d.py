@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 
-
-import os, sys, pyfits
+import os, sys
 import wlcal
 import traceline
+from astropy.io import fits
 
 import pysalt.mp_logging
 import logging
@@ -162,7 +162,7 @@ def make_2d_skyspectrum(hdulist,
     Parameters
     ----------
 
-    hdulist : pyfits.HDUList
+    hdulist : fits.HDUList
 
         multi-extension FITS HDUList of input object frame. 
 
@@ -239,7 +239,7 @@ def make_2d_skyspectrum(hdulist,
     # XXXXXXXX
     # Change this to add masked region as separate extension
     #
-    pyfits.HDUList([pyfits.PrimaryHDU(header=hdulist['SCI'].header,
+    fits.HDUList([fits.PrimaryHDU(header=hdulist['SCI'].header,
                                       data=obj_masked)]).writeto("obj_masked.fits", clobber=True)
 
     #
@@ -293,7 +293,7 @@ def make_2d_skyspectrum(hdulist,
     sky_2d = sky_2d.reshape(wls_2d.shape)
     
     # For now, write the sky spectrum to FITS so we can have a look at it in ds9
-    pyfits.HDUList([pyfits.PrimaryHDU(data=sky_2d)]).writeto("sky_2d.fits", clobber=True)
+    fits.HDUList([fits.PrimaryHDU(data=sky_2d)]).writeto("sky_2d.fits", clobber=True)
 
     return sky_2d
 
@@ -320,13 +320,13 @@ if __name__ == "__main__":
     #
     # Now we should have a full 2-D wavelength model for our data frame
     #
-    obj_hdulist = pyfits.open(objfile)
+    obj_hdulist = fits.open(objfile)
     
-    obj_out = pyfits.HDUList([
-            pyfits.PrimaryHDU(),
-            pyfits.ImageHDU(header=obj_hdulist['SCI'].header,
+    obj_out = fits.HDUList([
+            fits.PrimaryHDU(),
+            fits.ImageHDU(header=obj_hdulist['SCI'].header,
                             data=obj_hdulist['SCI'].data),
-            pyfits.ImageHDU(data=wls_2d),
+            fits.ImageHDU(data=wls_2d),
             ])
     obj_out.writeto(sys.argv[3], clobber=True)
 
@@ -346,7 +346,7 @@ if __name__ == "__main__":
     #
     obj_data = obj_hdulist['SCI'].data
     skysub_data = obj_data - sky_2d
-    pyfits.HDUList([pyfits.PrimaryHDU(data=skysub_data)]).writeto("skysub_2d.fits", clobber=True)
+    fits.HDUList([fits.PrimaryHDU(data=skysub_data)]).writeto("skysub_2d.fits", clobber=True)
 
     #numpy.array(sys.argv[4].split(",")).astype(numpy.int)
 
