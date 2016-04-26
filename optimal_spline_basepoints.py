@@ -12,6 +12,9 @@ import wlcal
 import skyline_intensity
 import logging
 import find_edges_of_skylines
+import fastedge
+
+use_fast_edges = True
 
 def satisfy_schoenberg_whitney(data, basepoints, k=3):
 
@@ -288,22 +291,35 @@ def optimal_sky_subtraction(obj_hdulist,
     #############################################################################
     if (add_edges):
         logger.info("Adding sky-samples for line edges")
-
-        pysalt.clobberfile("edges.cheat")
-        if (not os.path.isfile("edges.cheat")):
-            edges = find_edges_of_skylines.find_edges_of_skylines(allskies, fn="XXX")
-            numpy.savetxt("edges.cheat", edges)
-        else:
-            edges = numpy.loadtxt("edges.cheat")
-
+        
+        
         dl = 1.
-        # distribute additional basepoints across 2. (+/- dl) angstroem 
-        # for each edge
         dn = 10
-        all_edge_points = numpy.empty((edges.shape[0], dn))
-        for ie, edge in enumerate(edges[:,0]):
-            bp = numpy.linspace(edge-dl, edge+dl, dn)
-            all_edge_points[ie,:] = bp[:]
+
+        if (use_fast_edges):
+            edges = fastedge.find_line_edges(allskies, line_sigma=2.75)
+
+            # distribute additional basepoints across 2. (+/- dl) angstroem 
+            # for each edge
+            all_edge_points = numpy.empty((edges.shape[0], dn))
+            for ie, edge in enumerate(edges):
+                bp = numpy.linspace(edge-dl, edge+dl, dn)
+                all_edge_points[ie,:] = bp[:]
+
+        else:
+            pysalt.clobberfile("edges.cheat")
+            if (not os.path.isfile("edges.cheat")):
+                edges = find_edges_of_skylines.find_edges_of_skylines(allskies, fn="XXX")
+                numpy.savetxt("edges.cheat", edges)
+            else:
+                edges = numpy.loadtxt("edges.cheat")
+
+            # distribute additional basepoints across 2. (+/- dl) angstroem 
+            # for each edge
+            all_edge_points = numpy.empty((edges.shape[0], dn))
+            for ie, edge in enumerate(edges[:,0]):
+                bp = numpy.linspace(edge-dl, edge+dl, dn)
+                all_edge_points[ie,:] = bp[:]
         
         # 
         # Now merge the list of new basepoints with the existing list.
