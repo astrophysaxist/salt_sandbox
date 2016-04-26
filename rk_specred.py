@@ -458,27 +458,33 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
             yshift = [0, 0]
             rotation = [0, 0]
             gap, xshift, yshift, rotation, status = pysalt.lib.saltio.readccdgeom(geomfile, logfile=None, status=0)
+            print "\n@@"*5, gap, xshift, yshift, rotation, "\n@"*5
+
             logger.debug("mosaicing -- GAP:%f - X-shift:%f/%f  y-shift:%f/%f  rotation:%f/%f" % (
                 gap, xshift[0], xshift[1], yshift[0], yshift[1], rotation[0], rotation[1]))
 
             #logger.info("File structure before mosaicing:")
             #hdulist.info()
 
-            gap = 90
-            xshift = [0.0, +5.9, -2.1]
-            yshift = [0.0, -2.6,  0.4]
-            rotation = [0,0,0]
-            hdulist = tiledata(hdulist, (gap, xshift, yshift, rotation))
-            #return
+            # gap = 90
+            # xshift = [0.0, +5.9, -2.1]
+            # yshift = [0.0, -2.6,  0.4]
+            # rotation = [0,0,0]
+            # hdulist = tiledata(hdulist, (gap, xshift, yshift, rotation))
+            # #return
 
             # create the mosaic
-            # hdulist = pysalt.saltred.saltmosaic.make_mosaic(
-            #     struct=hdulist, 
-            #     gap=gap, xshift=xshift, yshift=yshift, rotation=rotation, 
-            #     interp_type='linear',              
-            #     #boundary='constant', constant=0, geotran=True, fill=False,
-            #     boundary='constant', constant=0, geotran=False, fill=False,
-            #     cleanup=True, log=None, verbose=verbose)
+            logger.info("Running IRAF geotran to create mosaic, be patient!")
+            hdulist = pysalt.saltred.saltmosaic.make_mosaic(
+                struct=hdulist, 
+                gap=gap, xshift=xshift, yshift=yshift, rotation=rotation, 
+                interp_type='linear',              
+                #boundary='constant', constant=0, geotran=True, fill=False,
+                boundary='constant', constant=0, geotran=False, fill=False,
+                cleanup=True, log=None, verbose=verbose)
+            hdulist[2].name = 'VAR'
+            hdulist[3].name = 'BPM'
+            hdulist.info()
             logger.debug("done with mosaic")
 
 
@@ -1174,15 +1180,16 @@ def specred(rawdir, prodir,
         # ss_hdu.name = "SKYSUB.OPT"
         # obj_hdulist.append(ss_hdu)
 
-        # ss_hdu2 = fits.ImageHDU(header=obj_hdulist['SCI.RAW'].header,
-        #                          data=sky2d)
-        # ss_hdu2.name = "SKYSUB.IMG"
-        # obj_hdulist.append(ss_hdu2)
+        ss_hdu2 = fits.ImageHDU(header=hdu['SCI'].header,
+                                 data=(sky_2d * opt_sky_scaling))
+        ss_hdu2.name = "SKYSUB.IMG"
+        hdu.append(ss_hdu2)
 
         #
         # Run cosmic ray rejection on the sky-line subtracted frame
         # Loop over all SCI extensions
         #
+        median_sky = numpy.median(sky_2d * opt_sky_scaling)
         sigclip = 5.0
         sigfrac = 0.6
         objlim = 5.0
@@ -1194,7 +1201,7 @@ def specred(rawdir, prodir,
             gain, readnoise = 1.3, 5
 
         crj = podi_cython.lacosmics(
-            numpy.array(skysub_img), #.astype(numpy.float64), 
+            numpy.array(skysub_img+median_sky), #.astype(numpy.float64), 
             gain=gain, 
             readnoise=readnoise, 
             niter=3,
@@ -1205,7 +1212,7 @@ def specred(rawdir, prodir,
         cell_cleaned, cell_mask, cell_saturated = crj
         
         final_hdu = fits.ImageHDU(header=hdu['SCI'].header,
-                                  data=cell_cleaned,
+                                  data=(cell_cleaned-median_sky),
                                   name="SKYSUB.OPT")
         hdu.append(final_hdu)
 
