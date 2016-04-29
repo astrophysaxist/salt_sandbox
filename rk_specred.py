@@ -1160,18 +1160,29 @@ def specred(rawdir, prodir,
         # to mask out sources first. Then compute smooth scaling actor that yields
         # the best overall sky subtraction.
         #
-        
-        opt_sky_scaling = optscale.minimize_sky_residuals(
+        logger.info("Minimizing sky residuals")
+        scaling_data, opt_sky_scaling = optscale.minimize_sky_residuals(
             img_data, sky_2d, vert_size=5, smooth=20, debug_out=True)
         # opt_sky_scaling = fm.reshape((-1,1))
         numpy.savetxt(out_filename[:-5]+".skyscaling", opt_sky_scaling)
+
+        data, filtered, full2d = optscale.minimize_sky_residuals2(
+            img=img_data, 
+            sky=sky_2d, 
+            wl=wl_map, 
+            bpm=hdu['BPM'].data,
+            vert_size=-25, 
+            dl=-25)
+        numpy.savetxt("new_scaling.dump", data)
+
         #
         # step 2: 
         # Also consider small-scale gaussian smoothing to more closely match the
         # sky-line profile along the slit.
         #
+        pass
 
-        skysub_img = (img_data) - (sky_2d * opt_sky_scaling)
+        skysub_img = (img_data) - (sky_2d * full2d) #opt_sky_scaling)
         skysub_hdu = fits.ImageHDU(header=hdu['SCI'].header,
                                      data=numpy.array(skysub_img),
                                      name="SKYSUB.X")
