@@ -45,7 +45,7 @@ def rssmodelwave(#grating,grang,artic,cbin,refimg,
     # Load all necessary information from FITS header
     #
     grating_angle = header['GR-ANGLE'] # alpha_C
-    articulation_angle = header['GRTILT'] # A_C
+    articulation_angle = header['CAMANG'] #GRTILT'] # A_C
     grating_name = header['GRATING']
 
     print "grating-angle:", grating_angle
@@ -104,16 +104,17 @@ def rssmodelwave(#grating,grang,artic,cbin,refimg,
         gamma = _y/fcam + gam0_r
         print beta.shape, gamma.shape
 
-        _lambda = numpy.cos(gamma) * (numpy.sin(beta) + numpy.sin(alpha)) / grating_lines_per_mm
+        # compute lambda (1e7 = angstroem/mm)
+        _lambda = 1e7 * numpy.cos(gamma) * (numpy.sin(beta) + numpy.sin(alpha)) / grating_lines_per_mm
 
         L = (_lambda - 4000.) / 1000.
         fcam = numpy.polyval(FCampoly,L)
         print "ITER", iteration, fcam.shape
 
-        pyfits.PrimaryHDU(data=_lambda*1e7+lam0).writeto("lambda_%d.fits" % (iteration+1), clobber=True)
+        pyfits.PrimaryHDU(data=_lambda).writeto("lambda_%d.fits" % (iteration+1), clobber=True)
 
         
-    return
+    return _lambda
 
         
     # now compute F_cam as function of lambda_0
