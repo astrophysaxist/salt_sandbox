@@ -9,7 +9,8 @@ import traceline
 
 from astropy.io import fits
 
-from optimal_spline_basepoints import satisfy_schoenberg_whitney
+#from optimal_spline_basepoints import satisfy_schoenberg_whitney
+import optimal_spline_basepoints
 import bottleneck
 import logging
 

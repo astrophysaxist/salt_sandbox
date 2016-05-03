@@ -13,6 +13,9 @@ import skyline_intensity
 import logging
 import find_edges_of_skylines
 import fastedge
+import skytrace
+import wlmodel
+
 
 use_fast_edges = True
 
@@ -92,7 +95,6 @@ def find_source_mask(img_data):
 
 
 
-
 def optimal_sky_subtraction(obj_hdulist, 
                             sky_regions=None,
                             slitprofile=None,
@@ -100,18 +102,29 @@ def optimal_sky_subtraction(obj_hdulist,
                             compare=False,
                             iterate=False,
                             return_2d = True,
-                            skiplength=5,
+                            skiplength=1,
                             mask_objects=True,
                             add_edges=True,
                             skyline_flat=None,
                             select_region=None):
 
     logger = logging.getLogger("OptSplineKs")
+    skiplength = 1
+
+    #
+    # Prepare a new refined wavelength map by using sky-lines
+    #
+    (x_eff, wl_map, medians, p_scale, p_skew, fm) = skytrace.create_wlmap_from_skylines(obj_hdulist)
+
+    wlmap_model = wlmodel.rssmodelwave(
+        header=obj_hdulist[0].header, 
+        img=obj_hdulist['SCI'].data,
+        xbin=4, ybin=4)
 
     logger.info("Loading all data from FITS")
-    obj_data = obj_hdulist['SCI.RAW'].data
-    obj_wl   = obj_hdulist['WAVELENGTH'].data
-    obj_rms  = obj_hdulist['VAR'].data
+    obj_data = obj_hdulist['SCI.RAW'].data #/ fm.reshape((-1,1))
+    obj_wl   = wlmap_model #wl_map #obj_hdulist['WAVELENGTH'].data
+    obj_rms  = obj_hdulist['VAR'].data / fm.reshape((-1,1))
 
     pysalt.clobberfile("XXX.fits")
     obj_hdulist.writeto("XXX.fits", clobber=True)
@@ -611,7 +624,7 @@ def optimal_sky_subtraction(obj_hdulist,
         # obj_hdulist.append(ss_hdu2)
 
 
-        return sky2d, spline_iter
+        return sky2d, spline_iter, (x_eff, wl_map, medians, p_scale, p_skew, fm)
 
 
 

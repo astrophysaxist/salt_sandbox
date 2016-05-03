@@ -466,26 +466,26 @@ def salt_prepdata(infile, badpixelimage=None, create_variance=False,
             #logger.info("File structure before mosaicing:")
             #hdulist.info()
 
-            # gap = 90
-            # xshift = [0.0, +5.9, -2.1]
-            # yshift = [0.0, -2.6,  0.4]
-            # rotation = [0,0,0]
-            # hdulist = tiledata(hdulist, (gap, xshift, yshift, rotation))
+            gap = 90
+            xshift = [0.0, +5.9, -2.1]
+            yshift = [0.0, -2.6,  0.4]
+            rotation = [0,0,0]
+            hdulist = tiledata(hdulist, (gap, xshift, yshift, rotation))
             # #return
 
             # create the mosaic
-            logger.info("Running IRAF geotran to create mosaic, be patient!")
-            hdulist = pysalt.saltred.saltmosaic.make_mosaic(
-                struct=hdulist, 
-                gap=gap, xshift=xshift, yshift=yshift, rotation=rotation, 
-                interp_type='linear',              
-                #boundary='constant', constant=0, geotran=True, fill=False,
-                boundary='constant', constant=0, geotran=False, fill=False,
-                cleanup=True, log=None, verbose=verbose)
-            hdulist[2].name = 'VAR'
-            hdulist[3].name = 'BPM'
-            hdulist.info()
-            logger.debug("done with mosaic")
+            # logger.info("Running IRAF geotran to create mosaic, be patient!")
+            # hdulist = pysalt.saltred.saltmosaic.make_mosaic(
+            #     struct=hdulist, 
+            #     gap=gap, xshift=xshift, yshift=yshift, rotation=rotation, 
+            #     interp_type='linear',              
+            #     boundary='constant', constant=0, geotran=True, fill=False,
+            #     #boundary='constant', constant=0, geotran=False, fill=False,
+            #     cleanup=True, log=None, verbose=verbose)
+            # hdulist[2].name = 'VAR'
+            # hdulist[3].name = 'BPM'
+            # hdulist.info()
+            # logger.debug("done with mosaic")
 
 
     return hdulist
@@ -1110,7 +1110,7 @@ def specred(rawdir, prodir,
 
             
 
-        sky_2d, spline = optimalskysub.optimal_sky_subtraction(
+        sky_2d, spline, extra = optimalskysub.optimal_sky_subtraction(
             hdu, 
             sky_regions=None, #sky_regions,
             N_points=2000,
@@ -1120,30 +1120,33 @@ def specred(rawdir, prodir,
             #select_region=numpy.array([[900,950]])
             select_region=numpy.array([[600,640],[660,700]])
         )
+        (x_eff, wl_map, medians, p_scale, p_skew, fm) = extra
 
-        bs = 100
-        maxbs = 10
+        # bs = 100
+        # maxbs = 10
 
-        sky2d_full = numpy.zeros(img_data.shape)
-        for nbs in range(maxbs):
+        # sky2d_full = numpy.zeros(img_data.shape)
+        # for nbs in range(maxbs):
 
-            sky_2d, spline = optimalskysub.optimal_sky_subtraction(
-                hdu, 
-                sky_regions=None, #sky_regions,
-                N_points=2000,
-                iterate=False,
-                skiplength=5,
-                skyline_flat=skyline_flat, #intensity_profile.reshape((-1,1)),
-                #select_region=numpy.array([[900,950]])
-                select_region=numpy.array([[nbs*bs,(nbs+1)*bs]])
-            )
-            if (sky_2d == None):
-                continue
-            sky2d_full[nbs*bs:(nbs+1)*bs, :] = sky_2d[nbs*bs:(nbs+1)*bs, :]
+        #     sky_2d, spline, extra = optimalskysub.optimal_sky_subtraction(
+        #         hdu, 
+        #         sky_regions=None, #sky_regions,
+        #         N_points=2000,
+        #         iterate=False,
+        #         skiplength=5,
+        #         skyline_flat=skyline_flat, #intensity_profile.reshape((-1,1)),
+        #         #select_region=numpy.array([[900,950]])
+        #         select_region=numpy.array([[nbs*bs,(nbs+1)*bs]])
+        #     )
+        #     extra = 
+        #     if (sky_2d == None):
+        #         continue
+        #     sky2d_full[nbs*bs:(nbs+1)*bs, :] = sky_2d[nbs*bs:(nbs+1)*bs, :]
 
-        sky_2d = sky2d_full
+        # sky_2d = sky2d_full
 
-        fits.PrimaryHDU(data=hdu['SCI.RAW'].data/skyline_flat).writeto("img_sky2d_input.fits", clobber=True)
+        fits.PrimaryHDU(data=hdu['SCI.RAW'].data/skyline_flat).writeto("img_sky2d_input_skylineflat.fits", clobber=True)
+        fits.PrimaryHDU(data=hdu['SCI.RAW'].data/fm.reshape((-1,1))).writeto("img_sky2d_input_fm.fits", clobber=True)
 
         fits.PrimaryHDU(data=sky_2d).writeto("img_sky2d.fits", clobber=True)
 
@@ -1157,18 +1160,29 @@ def specred(rawdir, prodir,
         # to mask out sources first. Then compute smooth scaling actor that yields
         # the best overall sky subtraction.
         #
-        
-        opt_sky_scaling = optscale.minimize_sky_residuals(
+        logger.info("Minimizing sky residuals")
+        scaling_data, opt_sky_scaling = optscale.minimize_sky_residuals(
             img_data, sky_2d, vert_size=5, smooth=20, debug_out=True)
+        # opt_sky_scaling = fm.reshape((-1,1))
+        numpy.savetxt(out_filename[:-5]+".skyscaling", opt_sky_scaling)
 
+        data, filtered, full2d = optscale.minimize_sky_residuals2(
+            img=img_data, 
+            sky=sky_2d, 
+            wl=wl_map, 
+            bpm=hdu['BPM'].data,
+            vert_size=-25, 
+            dl=-25)
+        numpy.savetxt("new_scaling.dump", data)
 
         #
         # step 2: 
         # Also consider small-scale gaussian smoothing to more closely match the
         # sky-line profile along the slit.
         #
+        pass
 
-        skysub_img = (img_data) - (sky_2d * opt_sky_scaling)
+        skysub_img = (img_data) - (sky_2d * full2d) #opt_sky_scaling)
         skysub_hdu = fits.ImageHDU(header=hdu['SCI'].header,
                                      data=numpy.array(skysub_img),
                                      name="SKYSUB.X")
@@ -1185,11 +1199,17 @@ def specred(rawdir, prodir,
         ss_hdu2.name = "SKYSUB.IMG"
         hdu.append(ss_hdu2)
 
+        hdu.append(fits.ImageHDU(header=hdu['SCI'].header,
+                                 data=wl_map,
+                                 name="WL_XXX")
+                   )
+
         #
         # Run cosmic ray rejection on the sky-line subtracted frame
         # Loop over all SCI extensions
         #
-        median_sky = numpy.median(sky_2d * opt_sky_scaling)
+        #median_sky = numpy.median(sky_2d * opt_sky_scaling)
+        median_sky = bottleneck.nanmedian(sky_2d * opt_sky_scaling)
         sigclip = 5.0
         sigfrac = 0.6
         objlim = 5.0
